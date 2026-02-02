@@ -1,0 +1,132 @@
+# PartnerCalc OS - Docker Compose
+# הערה: PostgreSQL כבר בשרת מרוחק, לא צריך להרים מקומית
+
+version: '3.8'
+
+services:
+  # Backend - FastAPI Server
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: partnercalc-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../backend/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+    working_dir: /app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/stats/summary"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend - Next.js
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: partnercalc-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+    working_dir: /app
+
+  # Redis - לתור משימות Celery
+  redis:
+    image: redis:7-alpine
+    container_name: partnercalc-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Celery Worker - עיבוד משימות רקע
+  celery_worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: partnercalc-celery-worker
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
+    env_file:
+      - ../backend/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+    working_dir: /app
+
+  # Celery Beat - משימות מתוזמנות
+  celery_beat:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: partnercalc-celery-beat
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+    env_file:
+      - ../backend/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      celery_worker:
+        condition: service_started
+    volumes:
+      - ../backend:/app
+    working_dir: /app
+
+  # Flower - ניטור Celery (אופציונלי)
+  flower:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: partnercalc-flower
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    env_file:
+      - ../backend/.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - celery_worker
+    profiles:
+      - monitoring
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  default:
+    name: partnercalc-network

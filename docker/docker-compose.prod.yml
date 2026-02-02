@@ -1,0 +1,177 @@
+# PartnerCalc OS - Production Docker Compose
+# Full stack with MariaDB, Redis, Nginx SSL
+
+version: '3.8'
+
+services:
+  # ========== Nginx Reverse Proxy ==========
+  nginx:
+    image: nginx:alpine
+    container_name: partnercalc-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/ssl/certs/nginx-selfsigned.crt:/etc/ssl/certs/nginx-selfsigned.crt:ro
+      - /etc/ssl/private/nginx-selfsigned.key:/etc/ssl/private/nginx-selfsigned.key:ro
+      - certbot-webroot:/var/www/certbot:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - partnercalc-network
+
+  # ========== Frontend (Next.js) ==========
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile.prod
+    container_name: partnercalc-frontend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    networks:
+      - partnercalc-network
+
+  # ========== Backend (FastAPI) ==========
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: partnercalc-backend
+    restart: unless-stopped
+    env_file:
+      - ../backend/.env
+    environment:
+      - DB_TYPE=mysql
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=partnercalc
+      - DB_PASSWORD=partnercalc123
+      - DB_NAME=partnercalc
+      - REDIS_URL=redis://redis:6379/0
+      - APP_ENV=production
+      - DEBUG=false
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - backend-data:/app/data
+    networks:
+      - partnercalc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ========== MariaDB Database ==========
+  mariadb:
+    image: mariadb:10.11
+    container_name: partnercalc-mariadb
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=root_password_change_me
+      - MYSQL_DATABASE=partnercalc
+      - MYSQL_USER=partnercalc
+      - MYSQL_PASSWORD=partnercalc123
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      - ./mariadb/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - partnercalc-network
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ========== Redis (Message Broker) ==========
+  redis:
+    image: redis:7-alpine
+    container_name: partnercalc-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - partnercalc-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========== Celery Worker ==========
+  celery-worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: partnercalc-celery-worker
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
+    env_file:
+      - ../backend/.env
+    environment:
+      - DB_TYPE=mysql
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=partnercalc
+      - DB_PASSWORD=partnercalc123
+      - DB_NAME=partnercalc
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - partnercalc-network
+
+  # ========== Celery Beat (Scheduler) ==========
+  celery-beat:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: partnercalc-celery-beat
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+    env_file:
+      - ../backend/.env
+    environment:
+      - DB_TYPE=mysql
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=partnercalc
+      - DB_PASSWORD=partnercalc123
+      - DB_NAME=partnercalc
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - celery-worker
+    networks:
+      - partnercalc-network
+
+# ========== Volumes ==========
+volumes:
+  mariadb-data:
+    driver: local
+  redis-data:
+    driver: local
+  backend-data:
+    driver: local
+  certbot-webroot:
+    driver: local
+
+# ========== Networks ==========
+networks:
+  partnercalc-network:
+    driver: bridge

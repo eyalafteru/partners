@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  # Redis - Message Broker for Celery
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Celery Worker - Background Tasks
+  celery-worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.dev
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      - DATABASE_URL=postgresql://postgresql_ppcmedia:pwaTaRA8SfHaDDp2@185.151.198.29:35432/partnercalc
+      - REDIS_URL=redis://redis:6379/0
+      - OLLAMA_HOST=host.docker.internal
+      - OLLAMA_PORT=11434
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Celery Beat - Scheduled Tasks
+  celery-beat:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.dev
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://postgresql_ppcmedia:pwaTaRA8SfHaDDp2@185.151.198.29:35432/partnercalc
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+
+volumes:
+  redis_data:
