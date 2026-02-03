@@ -3,7 +3,7 @@ PartnerCalc OS - Scans API
 ניהול סריקות וקמפיינים
 """
 import json
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
@@ -951,14 +951,13 @@ async def update_scan(
 async def add_keywords_to_scan(
     scan_id: int,
     data: AddKeywordsRequest,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_async_session)
 ):
     """
     הוספת מילות מפתח חדשות לסריקה קיימת
-    מסנן כפילויות של דומיינים
+    מסנן כפילויות של דומיינים - רץ ב-background
     """
-    from urllib.parse import urlparse
-    
     result = await session.execute(
         select(ScanCampaign).where(ScanCampaign.id == scan_id)
     )
@@ -967,19 +966,18 @@ async def add_keywords_to_scan(
     if not campaign:
         raise HTTPException(status_code=404, detail="סריקה לא נמצאה")
     
-    # Get existing domains in this campaign
-    existing_result = await session.execute(
-        select(ScanQueue.domain).where(ScanQueue.campaign_id == scan_id)
-    )
-    existing_domains = set(r[0] for r in existing_result.all() if r[0])
-    
-    logger.info(f"📊 Campaign {scan_id} has {len(existing_domains)} existing domains")
-    
     # Update keywords list
     current_keywords = campaign.keywords or []
     new_keywords = [k.strip() for k in data.keywords if k.strip() and k.strip() not in current_keywords]
-    campaign.keywords = current_keywords + new_keywords
     
+    if not new_keywords:
+        return {
+            "message": "לא נמצאו מילות מפתח חדשות להוספה",
+            "new_keywords": [],
+            "total_keywords": len(campaign.keywords)
+        }
+    
+    campaign.keywords = current_keywords + new_keywords
     await session.commit()
     
     if not data.auto_start:
@@ -989,81 +987,118 @@ async def add_keywords_to_scan(
             "total_keywords": len(campaign.keywords)
         }
     
-    # Run Apify scan for new keywords
-    apify = get_apify_scraper()
-    new_urls_added = 0
-    duplicates_skipped = 0
-    
-    for keyword in new_keywords:
-        try:
-            urls = await apify.search(
-                keyword, 
-                max_results=campaign.results_per_query or 100
-            )
-            
-            for url_data in urls:
-                url = url_data.get("url", "")
-                try:
-                    parsed = urlparse(url)
-                    domain = parsed.netloc.replace("www.", "")
-                    
-                    # Skip if domain already exists
-                    if domain in existing_domains:
-                        duplicates_skipped += 1
-                        continue
-                    
-                    # Add new domain
-                    existing_domains.add(domain)
-                    
-                    queue_item = ScanQueue(
-                        campaign_id=scan_id,
-                        url=url,
-                        domain=domain,
-                        title=url_data.get("title", ""),
-                        description=url_data.get("description", ""),
-                        google_position=url_data.get("position", 0),
-                        status="pending"
-                    )
-                    session.add(queue_item)
-                    new_urls_added += 1
-                    
-                except Exception as e:
-                    logger.warning(f"Error parsing URL {url}: {e}")
-                    
-        except Exception as e:
-            logger.error(f"Error scanning keyword '{keyword}': {e}")
-    
+    # Mark as running and start in background
+    campaign.status = "running"
     await session.commit()
     
-    # Update campaign counts
-    total_result = await session.execute(
-        select(func.count(ScanQueue.id)).where(ScanQueue.campaign_id == scan_id)
+    background_tasks.add_task(
+        run_add_keywords_background,
+        scan_id,
+        new_keywords,
+        campaign.results_per_query or 100
     )
-    campaign.total_urls = total_result.scalar_one()
-    await session.commit()
     
-    logger.info(f"✅ Added {new_urls_added} new URLs, skipped {duplicates_skipped} duplicates")
+    logger.info(f"🔄 Started background add-keywords for campaign {scan_id} with {len(new_keywords)} new keywords")
     
     return {
-        "message": f"נוספו {new_urls_added} דומיינים חדשים",
+        "message": f"נוספו {len(new_keywords)} מילות מפתח, הסריקה התחילה ברקע",
         "new_keywords": new_keywords,
-        "new_urls": new_urls_added,
-        "duplicates_skipped": duplicates_skipped,
-        "total_urls": campaign.total_urls
+        "status": "running"
     }
+
+
+async def run_add_keywords_background(scan_id: int, keywords: list, max_results: int):
+    """Background task for adding keywords and scanning"""
+    from urllib.parse import urlparse
+    from app.database import async_session_maker
+    
+    async with async_session_maker() as session:
+        try:
+            # Get existing domains
+            existing_result = await session.execute(
+                select(ScanQueue.domain).where(ScanQueue.campaign_id == scan_id)
+            )
+            existing_domains = set(r[0] for r in existing_result.all() if r[0])
+            
+            logger.info(f"🔄 Background add-keywords: {len(keywords)} keywords, {len(existing_domains)} existing domains")
+            
+            apify = get_apify_scraper()
+            new_urls_added = 0
+            duplicates_skipped = 0
+            
+            for keyword in keywords:
+                try:
+                    urls = await apify.search(keyword, max_results=max_results)
+                    
+                    for url_data in urls:
+                        url = url_data.get("url", "")
+                        try:
+                            parsed = urlparse(url)
+                            domain = parsed.netloc.replace("www.", "")
+                            
+                            if domain in existing_domains:
+                                duplicates_skipped += 1
+                                continue
+                            
+                            existing_domains.add(domain)
+                            
+                            queue_item = ScanQueue(
+                                campaign_id=scan_id,
+                                url=url,
+                                domain=domain,
+                                title=url_data.get("title", ""),
+                                description=url_data.get("description", ""),
+                                google_position=url_data.get("position", 0),
+                                status="pending"
+                            )
+                            session.add(queue_item)
+                            new_urls_added += 1
+                            
+                        except Exception as e:
+                            logger.warning(f"Error parsing URL {url}: {e}")
+                            
+                except Exception as e:
+                    logger.error(f"Error scanning keyword '{keyword}': {e}")
+            
+            await session.commit()
+            
+            # Update campaign
+            result = await session.execute(
+                select(ScanCampaign).where(ScanCampaign.id == scan_id)
+            )
+            campaign = result.scalar_one_or_none()
+            if campaign:
+                total_result = await session.execute(
+                    select(func.count(ScanQueue.id)).where(ScanQueue.campaign_id == scan_id)
+                )
+                campaign.total_urls = total_result.scalar_one()
+                campaign.status = "completed"
+                await session.commit()
+            
+            logger.info(f"✅ Background add-keywords complete: {new_urls_added} new, {duplicates_skipped} duplicates")
+            
+        except Exception as e:
+            logger.error(f"❌ Background add-keywords failed: {e}")
+            result = await session.execute(
+                select(ScanCampaign).where(ScanCampaign.id == scan_id)
+            )
+            campaign = result.scalar_one_or_none()
+            if campaign:
+                campaign.status = "failed"
+                await session.commit()
 
 
 @router.post("/{scan_id}/rescan-keywords")
 async def rescan_existing_keywords(
     scan_id: int,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_async_session)
 ):
     """
     סריקה מחדש של אותן מילות מפתח
     מסנן כפילויות - רק דומיינים חדשים יתווספו
+    רץ ב-background כדי לא לחסום את השרת
     """
-    from urllib.parse import urlparse
-    
     result = await session.execute(
         select(ScanCampaign).where(ScanCampaign.id == scan_id)
     )
@@ -1075,77 +1110,107 @@ async def rescan_existing_keywords(
     if not campaign.keywords:
         raise HTTPException(status_code=400, detail="אין מילות מפתח לסריקה")
     
-    # Get existing domains in this campaign
-    existing_result = await session.execute(
-        select(ScanQueue.domain).where(ScanQueue.campaign_id == scan_id)
-    )
-    existing_domains = set(r[0] for r in existing_result.all() if r[0])
-    
-    logger.info(f"🔄 Rescanning {len(campaign.keywords)} keywords for campaign {scan_id}")
-    logger.info(f"📊 Campaign has {len(existing_domains)} existing domains")
-    
-    # Run Apify scan for all existing keywords
-    apify = get_apify_scraper()
-    new_urls_added = 0
-    duplicates_skipped = 0
-    
-    for keyword in campaign.keywords:
-        try:
-            urls = await apify.search(
-                keyword, 
-                max_results=campaign.results_per_query or 100
-            )
-            
-            for url_data in urls:
-                url = url_data.get("url", "")
-                try:
-                    parsed = urlparse(url)
-                    domain = parsed.netloc.replace("www.", "")
-                    
-                    # Skip if domain already exists
-                    if domain in existing_domains:
-                        duplicates_skipped += 1
-                        continue
-                    
-                    # Add new domain
-                    existing_domains.add(domain)
-                    
-                    queue_item = ScanQueue(
-                        campaign_id=scan_id,
-                        url=url,
-                        domain=domain,
-                        title=url_data.get("title", ""),
-                        description=url_data.get("description", ""),
-                        google_position=url_data.get("position", 0),
-                        status="pending"
-                    )
-                    session.add(queue_item)
-                    new_urls_added += 1
-                    
-                except Exception as e:
-                    logger.warning(f"Error parsing URL {url}: {e}")
-                    
-        except Exception as e:
-            logger.error(f"Error scanning keyword '{keyword}': {e}")
-    
+    # Mark campaign as running
+    campaign.status = "running"
     await session.commit()
     
-    # Update campaign counts
-    total_result = await session.execute(
-        select(func.count(ScanQueue.id)).where(ScanQueue.campaign_id == scan_id)
+    # Run in background
+    background_tasks.add_task(
+        run_rescan_keywords_background,
+        scan_id,
+        list(campaign.keywords),
+        campaign.results_per_query or 100
     )
-    campaign.total_urls = total_result.scalar_one()
-    await session.commit()
     
-    logger.info(f"✅ Rescan complete: {new_urls_added} new, {duplicates_skipped} duplicates")
+    logger.info(f"🔄 Started background rescan for campaign {scan_id} with {len(campaign.keywords)} keywords")
     
     return {
-        "message": f"נוספו {new_urls_added} דומיינים חדשים",
-        "new_urls": new_urls_added,
-        "duplicates_skipped": duplicates_skipped,
-        "total_urls": campaign.total_urls,
-        "keywords_scanned": len(campaign.keywords)
+        "message": "סריקה מחדש התחילה ברקע",
+        "status": "running",
+        "keywords_count": len(campaign.keywords)
     }
+
+
+async def run_rescan_keywords_background(scan_id: int, keywords: list, max_results: int):
+    """Background task for rescanning keywords"""
+    from urllib.parse import urlparse
+    from app.database import async_session_maker
+    
+    async with async_session_maker() as session:
+        try:
+            # Get existing domains
+            existing_result = await session.execute(
+                select(ScanQueue.domain).where(ScanQueue.campaign_id == scan_id)
+            )
+            existing_domains = set(r[0] for r in existing_result.all() if r[0])
+            
+            logger.info(f"🔄 Background rescan: {len(keywords)} keywords, {len(existing_domains)} existing domains")
+            
+            apify = get_apify_scraper()
+            new_urls_added = 0
+            duplicates_skipped = 0
+            
+            for keyword in keywords:
+                try:
+                    urls = await apify.search(keyword, max_results=max_results)
+                    
+                    for url_data in urls:
+                        url = url_data.get("url", "")
+                        try:
+                            parsed = urlparse(url)
+                            domain = parsed.netloc.replace("www.", "")
+                            
+                            if domain in existing_domains:
+                                duplicates_skipped += 1
+                                continue
+                            
+                            existing_domains.add(domain)
+                            
+                            queue_item = ScanQueue(
+                                campaign_id=scan_id,
+                                url=url,
+                                domain=domain,
+                                title=url_data.get("title", ""),
+                                description=url_data.get("description", ""),
+                                google_position=url_data.get("position", 0),
+                                status="pending"
+                            )
+                            session.add(queue_item)
+                            new_urls_added += 1
+                            
+                        except Exception as e:
+                            logger.warning(f"Error parsing URL {url}: {e}")
+                            
+                except Exception as e:
+                    logger.error(f"Error scanning keyword '{keyword}': {e}")
+            
+            await session.commit()
+            
+            # Update campaign
+            result = await session.execute(
+                select(ScanCampaign).where(ScanCampaign.id == scan_id)
+            )
+            campaign = result.scalar_one_or_none()
+            if campaign:
+                total_result = await session.execute(
+                    select(func.count(ScanQueue.id)).where(ScanQueue.campaign_id == scan_id)
+                )
+                campaign.total_urls = total_result.scalar_one()
+                campaign.status = "completed"
+                await session.commit()
+            
+            logger.info(f"✅ Background rescan complete: {new_urls_added} new, {duplicates_skipped} duplicates")
+            
+        except Exception as e:
+            logger.error(f"❌ Background rescan failed: {e}")
+            # Mark as failed
+            result = await session.execute(
+                select(ScanCampaign).where(ScanCampaign.id == scan_id)
+            )
+            campaign = result.scalar_one_or_none()
+            if campaign:
+                campaign.status = "failed"
+                await session.commit()
 
 
 @router.post("/{scan_id}/start")
