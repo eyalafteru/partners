@@ -219,7 +219,7 @@ async def test_send_to_lead(
         subject=subject,
         body=body,
         communication_id=comm.id,
-        enable_tracking=False  # Disabled - trycloudflare.com is blacklisted by Spamhaus
+        enable_tracking=True  # Enabled - using partners.ppcmedia.co.il
     )
     
     if result["success"]:

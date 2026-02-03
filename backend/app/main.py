@@ -55,15 +55,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"📬 Email Sync failed to start: {e}")
     
-    # Start email scheduler task - DISABLED temporarily to prevent DB locks  
+    # Start email scheduler task
     email_scheduler_task = None
-    # try:
-    #     from app.tasks.email_scheduler import start_email_scheduler
-    #     email_scheduler_task = asyncio.create_task(start_email_scheduler())
-    #     logger.info("📧 Email Scheduler started - sending queued emails")
-    # except Exception as e:
-    #     logger.warning(f"📧 Email Scheduler failed to start: {e}")
-    logger.info("📧 Email Scheduler DISABLED - preventing DB locks")
+    try:
+        from app.tasks.email_scheduler import start_email_scheduler
+        email_scheduler_task = asyncio.create_task(start_email_scheduler())
+        logger.info("📧 Email Scheduler started - sending queued emails")
+    except Exception as e:
+        logger.warning(f"📧 Email Scheduler failed to start: {e}")
     
     # Resume incomplete pipelines on startup
     try:

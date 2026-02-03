@@ -20,7 +20,7 @@ import os
 # עדכן ב-.env או כמשתנה סביבה
 TRACKING_BASE_URL = os.getenv(
     "TRACKING_BASE_URL", 
-    "https://wizard-naval-countries-debian.trycloudflare.com/api/tracking"
+    "https://partners.ppcmedia.co.il/api/tracking"
 )
 
 

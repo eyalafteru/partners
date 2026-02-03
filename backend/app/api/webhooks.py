@@ -12,6 +12,7 @@ from datetime import datetime
 from app.database import get_async_session
 from app.models.communication import Communication
 from app.models.lead import Lead
+from app.models import Blacklist
 
 router = APIRouter()
 
@@ -220,10 +221,62 @@ async def email_webhook(
             comm.error_message = f"{event_type}: {event.get('reason', '')}"
             logger.warning(f"Email {event_type}: {message_id}")
             
+            # AUTO-BLACKLIST bounced emails
+            email = event.get("email")
+            if email:
+                # Check if not already blacklisted
+                existing = await session.execute(
+                    select(Blacklist).where(Blacklist.email == email)
+                )
+                if not existing.scalar_one_or_none():
+                    entry = Blacklist(
+                        email=email,
+                        reason="bounced",
+                        source="auto_bounce",
+                        notes=f"Auto: {event_type} - {event.get('reason', '')}"
+                    )
+                    session.add(entry)
+                    
+                    # Update lead status to bounced
+                    if comm.lead_id:
+                        lead_result = await session.execute(
+                            select(Lead).where(Lead.id == comm.lead_id)
+                        )
+                        lead = lead_result.scalar_one_or_none()
+                        if lead:
+                            lead.status = "bounced"
+                    
+                    logger.info(f"Auto-blacklisted bounced email: {email}")
+            
         elif event_type == "spamreport":
             comm.status = "failed"
             comm.error_message = "spam_report"
             logger.warning(f"Email spam report: {message_id}")
+            
+            # AUTO-BLACKLIST spam reporters
+            email = event.get("email")
+            if email:
+                existing = await session.execute(
+                    select(Blacklist).where(Blacklist.email == email)
+                )
+                if not existing.scalar_one_or_none():
+                    entry = Blacklist(
+                        email=email,
+                        reason="spam_complaint",
+                        source="auto_spam",
+                        notes="Auto: User reported as spam"
+                    )
+                    session.add(entry)
+                    
+                    if comm.lead_id:
+                        lead_result = await session.execute(
+                            select(Lead).where(Lead.id == comm.lead_id)
+                        )
+                        lead = lead_result.scalar_one_or_none()
+                        if lead:
+                            lead.status = "blacklisted"
+                    
+                    logger.info(f"Auto-blacklisted spam reporter: {email}")
     
     await session.commit()
     

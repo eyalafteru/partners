@@ -156,6 +156,20 @@ export default function LeadsPage() {
   const [pendingReplies, setPendingReplies] = useState<PendingReply[]>([])
   const [pendingStats, setPendingStats] = useState<PendingStats | null>(null)
   
+  // Sent tracking state
+  const [sentMessages, setSentMessages] = useState<Message[]>([])
+  const [sentFilter, setSentFilter] = useState<string>('all')
+  const [sentStats, setSentStats] = useState<{
+    total: number
+    delivered: number
+    opened: number
+    clicked: number
+    bounced: number
+    open_rate: number
+    click_rate: number
+    bounce_rate: number
+  } | null>(null)
+  
   // Modal states
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [isTestSendMode, setIsTestSendMode] = useState(false)
@@ -223,7 +237,7 @@ export default function LeadsPage() {
     } else if (activeTab === 'sent') {
       fetchSentMessages()
     }
-  }, [activeTab, page, quickFilter, searchTerm])
+  }, [activeTab, page, quickFilter, searchTerm, sentFilter])
 
   const fetchLeads = async () => {
     setLoading(true)
@@ -294,9 +308,20 @@ export default function LeadsPage() {
   const fetchSentMessages = async () => {
     setLoading(true)
     try {
-      const res = await fetch(`${API_URL}/api/communication/?direction=outbound&channel=email&group_by_recipient=true`)
+      // Fetch with tracking data
+      const statusParam = sentFilter !== 'all' ? `&status=${sentFilter}` : ''
+      const res = await fetch(`${API_URL}/api/communication/sent-tracking?per_page=100${statusParam}`)
       const data = await res.json()
-      setGroupedSentMessages(data)
+      
+      if (data.items) {
+        setSentMessages(data.items)
+        setSentStats(data.stats)
+      }
+      
+      // Also fetch grouped for backward compatibility
+      const groupedRes = await fetch(`${API_URL}/api/communication/?direction=outbound&channel=email&group_by_recipient=true`)
+      const groupedData = await groupedRes.json()
+      setGroupedSentMessages(groupedData)
     } catch (error) {
       console.error('Failed to fetch sent:', error)
     } finally {
@@ -425,6 +450,13 @@ export default function LeadsPage() {
     } else {
       setSelectedIds(new Set(contactable.map(l => l.id)))
     }
+  }
+
+  const selectContactable = (count: number) => {
+    const contactable = filteredLeads
+      .filter(canContactLead)
+      .slice(0, count)
+    setSelectedIds(new Set(contactable.map(l => l.id)))
   }
 
   const addToQueue = async () => {
@@ -750,6 +782,25 @@ export default function LeadsPage() {
                 </button>
               ))}
               
+              {/* כפתורי בחירה מהירה */}
+              <div className="flex items-center gap-2 mr-4 border-r border-gray-200 pr-4">
+                <span className="text-sm text-gray-500">בחירה מהירה:</span>
+                <button
+                  onClick={() => selectContactable(50)}
+                  className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200 flex items-center gap-1"
+                >
+                  <CheckSquare className="w-4 h-4" />
+                  50
+                </button>
+                <button
+                  onClick={() => selectContactable(100)}
+                  className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 flex items-center gap-1"
+                >
+                  <CheckSquare className="w-4 h-4" />
+                  100
+                </button>
+              </div>
+              
               {/* 📧 Template Selector for Test Send */}
               <div className="mr-auto flex items-center gap-2">
                 <span className="text-sm text-gray-500">תבנית לשליחה:</span>
@@ -1065,54 +1116,135 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* Sent Tab */}
+      {/* Sent Tab - Enhanced with Tracking */}
       {activeTab === 'sent' && (
         <div className="card overflow-hidden p-0">
+          {/* Stats Bar */}
+          {sentStats && (
+            <div className="grid grid-cols-5 gap-4 p-4 bg-gradient-to-r from-gray-50 to-gray-100 border-b">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-blue-600">{sentStats.total}</div>
+                <div className="text-xs text-gray-500">נשלחו</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-green-600">{sentStats.delivered}</div>
+                <div className="text-xs text-gray-500">נמסרו</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-purple-600">{sentStats.opened}</div>
+                <div className="text-xs text-gray-500">נפתחו ({sentStats.open_rate}%)</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-orange-600">{sentStats.clicked}</div>
+                <div className="text-xs text-gray-500">קליקים ({sentStats.click_rate}%)</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-red-600">{sentStats.bounced}</div>
+                <div className="text-xs text-gray-500">חזרו ({sentStats.bounce_rate}%)</div>
+              </div>
+            </div>
+          )}
+
+          {/* Filter Buttons */}
+          <div className="p-4 border-b flex gap-2 flex-wrap">
+            {[
+              { value: 'all', label: 'הכל', icon: '📧' },
+              { value: 'sent', label: 'נשלחו', icon: '📤' },
+              { value: 'opened', label: 'נפתחו', icon: '👁️' },
+              { value: 'clicked', label: 'קליקים', icon: '🔗' },
+              { value: 'bounced', label: 'חזרו', icon: '❌' }
+            ].map(filter => (
+              <button
+                key={filter.value}
+                onClick={() => setSentFilter(filter.value)}
+                className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-1 transition ${
+                  sentFilter === filter.value 
+                    ? 'bg-blue-600 text-white' 
+                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                }`}
+              >
+                {filter.icon} {filter.label}
+              </button>
+            ))}
+          </div>
+
           {loading ? (
             <div className="p-8 text-center text-gray-500">
               <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-2" />
               טוען...
             </div>
-          ) : groupedSentMessages.length === 0 ? (
+          ) : sentMessages.length === 0 ? (
             <div className="p-8 text-center text-gray-500">
               <SendHorizontal className="w-16 h-16 mx-auto mb-4 opacity-50" />
               <p>אין הודעות יוצאות</p>
             </div>
           ) : (
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b">
-                <tr>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">נמען</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">דומיינים</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">נשלחו</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">אחרון</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">פעולות</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {groupedSentMessages.map(group => (
-                  <tr key={group.email} className="hover:bg-gray-50">
-                    <td className="px-4 py-3"><span className="font-medium text-blue-600">{group.email}</span></td>
-                    <td className="px-4 py-3 text-sm">
-                      <div className="flex flex-wrap gap-1">
-                        {group.domains.map(domain => (
-                          <span key={domain} className="px-2 py-0.5 bg-gray-100 rounded text-xs">{domain}</span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">{group.total_sent}</span>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{group.last_sent ? formatDate(group.last_sent) : '-'}</td>
-                    <td className="px-4 py-3">
-                      <button onClick={() => setSelectedGroup(group)} className="text-blue-600 hover:text-blue-800 text-sm flex items-center gap-1">
-                        <Eye className="w-4 h-4" /> הצג
-                      </button>
-                    </td>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b">
+                  <tr>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">דומיין</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">נמען</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">נושא</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">נשלח</th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500">סטטוס</th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500">👁️</th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500">🔗</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y">
+                  {sentMessages.map(msg => (
+                    <tr key={msg.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        <span className="text-sm font-medium text-gray-900">{msg.domain || '-'}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-sm text-blue-600">{msg.to_email}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-sm text-gray-700 max-w-xs truncate block">{msg.subject}</span>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        {msg.sent_at ? formatDate(msg.sent_at) : '-'}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          msg.status === 'failed' ? 'bg-red-100 text-red-800' :
+                          msg.status === 'delivered' ? 'bg-green-100 text-green-800' :
+                          msg.status === 'read' ? 'bg-purple-100 text-purple-800' :
+                          msg.status === 'sent' ? 'bg-blue-100 text-blue-800' :
+                          'bg-gray-100 text-gray-800'
+                        }`}>
+                          {msg.status === 'failed' ? '❌ נכשל' :
+                           msg.status === 'delivered' ? '✅ נמסר' :
+                           msg.status === 'read' ? '👁️ נקרא' :
+                           msg.status === 'sent' ? '📤 נשלח' :
+                           msg.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {msg.opens_count && msg.opens_count > 0 ? (
+                          <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded-full text-xs font-medium">
+                            {msg.opens_count}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">-</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {msg.clicks && msg.clicks.length > 0 ? (
+                          <span className="px-2 py-1 bg-orange-100 text-orange-800 rounded-full text-xs font-medium">
+                            {msg.clicks.length}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}

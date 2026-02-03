@@ -628,3 +628,163 @@ async def mark_as_read(
     await session.flush()
     
     return {"message": "הודעה סומנה כנקראה"}
+
+
+# ========== Email Tracking Dashboard ==========
+
+@router.get("/sent-tracking")
+async def get_sent_with_tracking(
+    status: Optional[str] = Query(None, description="סינון לפי סטטוס: sent, delivered, opened, bounced"),
+    search: Optional[str] = Query(None, description="חיפוש לפי מייל או דומיין"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    קבלת מיילים שנשלחו עם מידע tracking מלא
+    מחזיר: items (רשימת מיילים), stats (סיכום), pagination
+    """
+    from sqlalchemy import desc, or_
+    
+    # Base query - join with Lead for domain info
+    base_query = select(Communication, Lead).outerjoin(
+        Lead, Communication.lead_id == Lead.id
+    ).where(
+        Communication.channel == "email",
+        Communication.direction == "outbound"
+    )
+    
+    # Apply status filter
+    if status:
+        if status == "opened":
+            base_query = base_query.where(Communication.opens_count > 0)
+        elif status == "bounced":
+            base_query = base_query.where(Communication.status == "failed")
+        elif status == "clicked":
+            # Using JSON check for clicks array
+            base_query = base_query.where(Communication.clicks.isnot(None))
+        else:
+            base_query = base_query.where(Communication.status == status)
+    
+    # Apply search filter
+    if search:
+        base_query = base_query.where(
+            or_(
+                Communication.recipient.contains(search),
+                Lead.domain.contains(search)
+            )
+        )
+    
+    # Get total count
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total_result = await session.execute(count_query)
+    total = total_result.scalar() or 0
+    
+    # Apply ordering and pagination
+    query = base_query.order_by(desc(Communication.sent_at))
+    offset = (page - 1) * per_page
+    query = query.offset(offset).limit(per_page)
+    
+    result = await session.execute(query)
+    rows = result.all()
+    
+    # Build items list
+    items = []
+    for comm, lead in rows:
+        clicks_count = len(comm.clicks) if comm.clicks else 0
+        items.append({
+            "id": comm.id,
+            "lead_id": comm.lead_id,
+            "domain": lead.domain if lead else None,
+            "to_email": comm.recipient,
+            "subject": comm.subject,
+            "status": comm.status,
+            "sent_at": comm.sent_at.isoformat() if comm.sent_at else None,
+            "delivered_at": comm.delivered_at.isoformat() if comm.delivered_at else None,
+            "read_at": comm.read_at.isoformat() if comm.read_at else None,
+            "opens_count": comm.opens_count or 0,
+            "clicks_count": clicks_count,
+            "clicks": comm.clicks or [],
+            "error_message": comm.error_message
+        })
+    
+    # Calculate stats
+    stats = await _get_sent_stats(session)
+    
+    return {
+        "items": items,
+        "stats": stats,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": (total + per_page - 1) // per_page
+        }
+    }
+
+
+async def _get_sent_stats(session: AsyncSession) -> dict:
+    """
+    חישוב סטטיסטיקות מיילים שנשלחו
+    """
+    from sqlalchemy import desc
+    
+    # Total sent
+    total_result = await session.execute(
+        select(func.count(Communication.id)).where(
+            Communication.channel == "email",
+            Communication.direction == "outbound"
+        )
+    )
+    total = total_result.scalar() or 0
+    
+    # Delivered (status = sent or delivered)
+    delivered_result = await session.execute(
+        select(func.count(Communication.id)).where(
+            Communication.channel == "email",
+            Communication.direction == "outbound",
+            Communication.status.in_(["sent", "delivered", "read"])
+        )
+    )
+    delivered = delivered_result.scalar() or 0
+    
+    # Opened (opens_count > 0)
+    opened_result = await session.execute(
+        select(func.count(Communication.id)).where(
+            Communication.channel == "email",
+            Communication.direction == "outbound",
+            Communication.opens_count > 0
+        )
+    )
+    opened = opened_result.scalar() or 0
+    
+    # Clicked (has clicks)
+    clicked_result = await session.execute(
+        select(func.count(Communication.id)).where(
+            Communication.channel == "email",
+            Communication.direction == "outbound",
+            Communication.clicks.isnot(None)
+        )
+    )
+    clicked = clicked_result.scalar() or 0
+    
+    # Bounced (status = failed)
+    bounced_result = await session.execute(
+        select(func.count(Communication.id)).where(
+            Communication.channel == "email",
+            Communication.direction == "outbound",
+            Communication.status == "failed"
+        )
+    )
+    bounced = bounced_result.scalar() or 0
+    
+    return {
+        "total": total,
+        "delivered": delivered,
+        "opened": opened,
+        "clicked": clicked,
+        "bounced": bounced,
+        "open_rate": round((opened / total * 100), 1) if total > 0 else 0,
+        "click_rate": round((clicked / total * 100), 1) if total > 0 else 0,
+        "bounce_rate": round((bounced / total * 100), 1) if total > 0 else 0
+    }
