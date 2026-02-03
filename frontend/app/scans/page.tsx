@@ -892,34 +892,30 @@ export default function ScansPage() {
     // Don't set analyzingAI to null - let the auto-refresh handle it when done
   }
 
-  // Auto-refresh results when analyzing
+  // Auto-refresh results when viewing results modal - always refresh while modal is open
   useEffect(() => {
-    if (!autoRefresh || !selectedScan) return
+    if (!selectedScan) return
 
-    const interval = setInterval(async () => {
+    // Immediately refresh when opening
+    const refreshResults = async () => {
       try {
-        const response = await fetch(`/api/scans/${selectedScan.id}/queue?limit=100`)
+        const response = await fetch(`/api/scans/${selectedScan.id}/queue?limit=200`)
         if (response.ok) {
           const data = await response.json()
           setScanResults(data)
-          
-          // Check if all items are processed
-          const stillProcessing = data.some((r: ScanResult) => 
-            r.status === 'pending' || r.status === 'analyzing'
-          )
-          
-          if (!stillProcessing) {
-            setAutoRefresh(false)
-            fetchScans() // Refresh main list
-          }
         }
       } catch (error) {
         console.error('Failed to refresh results:', error)
       }
-    }, 2000) // Refresh every 2 seconds
+    }
+
+    refreshResults() // Initial refresh
+
+    // Continue refreshing every 3 seconds while modal is open
+    const interval = setInterval(refreshResults, 3000)
 
     return () => clearInterval(interval)
-  }, [autoRefresh, selectedScan])
+  }, [selectedScan])
 
   // Rescan existing keywords (add only new domains)
   const rescanExistingKeywords = async (scanId: number) => {
