@@ -185,6 +185,11 @@ class ScanQueueItem(BaseModel):
     gpt_match_duration_seconds: Optional[float] = None
     gpt_all_recommended_calcs: Optional[List[Dict]] = None
     
+    # Pipeline status
+    pipeline_stage: int = 0
+    pipeline_stage_label: str = "ממתין"
+    retry_count: int = 0
+    
     class Config:
         from_attributes = True
 
@@ -745,7 +750,11 @@ async def _add_has_content_and_pages(item: ScanQueue, session: AsyncSession) -> 
         "gpt_recommended_calc_score": item.gpt_recommended_calc_score,
         "gpt_recommended_calc_reason": item.gpt_recommended_calc_reason,
         "gpt_match_duration_seconds": item.gpt_match_duration_seconds,
-        "gpt_all_recommended_calcs": json.loads(item.gpt_all_recommended_calcs) if item.gpt_all_recommended_calcs else None
+        "gpt_all_recommended_calcs": json.loads(item.gpt_all_recommended_calcs) if item.gpt_all_recommended_calcs else None,
+        # Pipeline Status
+        "pipeline_stage": item.pipeline_stage or 0,
+        "pipeline_stage_label": item.pipeline_stage_label if hasattr(item, 'pipeline_stage_label') else PIPELINE_STAGE_LABELS.get(PipelineStage(item.pipeline_stage or 0), "ממתין"),
+        "retry_count": item.retry_count or 0
     }
     
     # Get scanned pages if deep scanned

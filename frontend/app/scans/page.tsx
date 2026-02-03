@@ -114,6 +114,10 @@ interface ScanResult {
     score: number
     reason: string
   }> | null
+  // Pipeline Status
+  pipeline_stage: number
+  pipeline_stage_label: string
+  retry_count: number
 }
 
 interface DomainItem {
@@ -142,6 +146,30 @@ interface DomainItem {
   is_blacklisted: boolean
   // Deep Scan
   deep_scanned: boolean
+}
+
+// Pipeline stage styling helper
+const PIPELINE_STAGES = {
+  0: { label: 'ממתין', color: 'bg-gray-100 text-gray-600', icon: '⏳' },
+  1: { label: 'תוכן נסרק', color: 'bg-blue-100 text-blue-700', icon: '📄' },
+  2: { label: 'סווג', color: 'bg-purple-100 text-purple-700', icon: '🤖' },
+  3: { label: 'WHOIS נבדק', color: 'bg-cyan-100 text-cyan-700', icon: '🔍' },
+  4: { label: 'ליד נוצר', color: 'bg-green-100 text-green-700', icon: '✅' },
+  5: { label: 'סונן', color: 'bg-yellow-100 text-yellow-700', icon: '🚫' },
+  6: { label: 'נכשל', color: 'bg-red-100 text-red-700', icon: '❌' },
+} as const
+
+function PipelineStageBadge({ stage, retryCount }: { stage: number, retryCount?: number }) {
+  const stageInfo = PIPELINE_STAGES[stage as keyof typeof PIPELINE_STAGES] || PIPELINE_STAGES[0]
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${stageInfo.color}`}>
+      <span>{stageInfo.icon}</span>
+      <span>{stageInfo.label}</span>
+      {retryCount && retryCount > 0 && (
+        <span className="text-orange-500 mr-1">({retryCount}🔄)</span>
+      )}
+    </span>
+  )
 }
 
 export default function ScansPage() {
@@ -1757,12 +1785,15 @@ export default function ScansPage() {
                 <h2 className="text-xl font-bold">
                   תוצאות: {selectedScan.name}
                 </h2>
-                <div className="text-sm text-gray-500 mt-1 flex gap-4">
-                  <span>סה"כ: {scanResults.length}</span>
-                  <span className="text-yellow-600">⏳ ממתין: {scanResults.filter(r => r.status === 'pending').length}</span>
-                  <span className="text-blue-600">🔄 מנתח: {scanResults.filter(r => r.status === 'analyzing').length}</span>
-                  <span className="text-green-600">✅ נמצא: {scanResults.filter(r => r.status === 'matched').length}</span>
-                  <span className="text-red-600">❌ נדחה: {scanResults.filter(r => r.status === 'discarded').length}</span>
+                <div className="text-sm text-gray-500 mt-1 flex gap-4 flex-wrap">
+                  <span className="font-medium">סה"כ: {scanResults.length}</span>
+                  <span className="text-gray-500">⏳ ממתין: {scanResults.filter(r => (r.pipeline_stage || 0) === 0).length}</span>
+                  <span className="text-blue-600">📄 נסרק: {scanResults.filter(r => r.pipeline_stage === 1).length}</span>
+                  <span className="text-purple-600">🤖 סווג: {scanResults.filter(r => r.pipeline_stage === 2).length}</span>
+                  <span className="text-cyan-600">🔍 WHOIS: {scanResults.filter(r => r.pipeline_stage === 3).length}</span>
+                  <span className="text-green-600">✅ ליד: {scanResults.filter(r => r.pipeline_stage === 4).length}</span>
+                  <span className="text-yellow-600">🚫 סונן: {scanResults.filter(r => r.pipeline_stage === 5).length}</span>
+                  <span className="text-red-600">❌ נכשל: {scanResults.filter(r => r.pipeline_stage === 6).length}</span>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -1882,7 +1913,7 @@ export default function ScansPage() {
                         </th>
                         <th className="text-right p-3 border-b font-medium text-gray-700 w-16">תצוגה</th>
                         <th className="text-right p-3 border-b font-medium text-gray-700">אתר</th>
-                        <th className="text-right p-3 border-b font-medium text-gray-700 w-24">סטטוס</th>
+                        <th className="text-right p-3 border-b font-medium text-gray-700 w-32">שלב פייפליין</th>
                         <th className="text-right p-3 border-b font-medium text-gray-700 w-28">סוג עסק</th>
                         <th className="text-right p-3 border-b font-medium text-gray-700 w-44">WHOIS</th>
                         <th className="text-right p-3 border-b font-medium text-gray-700 w-20">תוכן</th>
@@ -1941,22 +1972,12 @@ export default function ScansPage() {
                             </div>
                           </td>
                           
-                          {/* Status */}
+                          {/* Pipeline Stage */}
                           <td className="p-3">
-                            <span className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full font-medium ${
-                              result.status === 'pending' ? 'bg-gray-100 text-gray-600' :
-                              result.status === 'analyzing' ? 'bg-blue-100 text-blue-700' :
-                              result.status === 'matched' ? 'bg-green-100 text-green-700' :
-                              result.status === 'discarded' ? 'bg-red-100 text-red-700' :
-                              result.status === 'error' ? 'bg-orange-100 text-orange-700' :
-                              'bg-gray-100'
-                            }`}>
-                              {result.status === 'pending' && '⏳ ממתין'}
-                              {result.status === 'analyzing' && <><Loader2 className="w-3 h-3 animate-spin" /> מנתח</>}
-                              {result.status === 'matched' && '✅ נמצא'}
-                              {result.status === 'discarded' && '❌ נדחה'}
-                              {result.status === 'error' && '⚠️ שגיאה'}
-                            </span>
+                            <PipelineStageBadge 
+                              stage={result.pipeline_stage || 0} 
+                              retryCount={result.retry_count} 
+                            />
                           </td>
                           
                           {/* Business Type (AI) */}
