@@ -2227,7 +2227,7 @@ function ScanModal({
         body: JSON.stringify({
           name: form.name,
           keywords: form.keywords.split('\n').map(k => k.trim()).filter(Boolean),
-          results_per_keyword: form.results_per_keyword,
+          results_per_query: form.results_per_keyword,
           auto_start: form.auto_start
         })
       })

@@ -91,6 +91,7 @@ class ScanCreate(BaseModel):
     keywords: List[str]
     category: Optional[str] = None
     results_per_query: int = 100  # 50, 100, 150, 200
+    auto_start: bool = True  # התחל סריקה אוטומטית
 
 
 class ScanResponse(BaseModel):
@@ -856,17 +857,27 @@ async def create_scan(
     if not data.keywords:
         raise HTTPException(status_code=400, detail="חייב לכלול לפחות מילת מפתח אחת")
     
+    # Set initial status based on auto_start
+    initial_status = "running" if data.auto_start else "pending"
+    
     campaign = ScanCampaign(
         name=data.name,
         keywords=data.keywords,
         category=data.category,
         results_per_query=data.results_per_query,
-        status="pending"
+        status=initial_status,
+        started_at=datetime.utcnow() if data.auto_start else None
     )
     
     session.add(campaign)
     await session.flush()
     await session.refresh(campaign)
+    
+    # Start Apify scan if auto_start is True
+    if data.auto_start:
+        import asyncio
+        logger.info(f"🚀 Auto-starting Apify scan for campaign {campaign.id}: {campaign.name}")
+        asyncio.create_task(run_apify_scan(campaign.id, campaign.keywords, campaign.results_per_query or 100))
     
     return ScanResponse(
         id=campaign.id,
@@ -879,10 +890,10 @@ async def create_scan(
         matched_count=0,
         discarded_count=0,
         contacted_count=0,
-        status="pending",
+        status=initial_status,
         progress_percent=0.0,
         created_at=campaign.created_at,
-        started_at=None,
+        started_at=campaign.started_at,
         completed_at=None
     )
 
