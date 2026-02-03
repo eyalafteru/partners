@@ -190,7 +190,28 @@ export default function LeadsPage() {
   useEffect(() => {
     fetchStats()
     fetchTemplates()
+    fetchInboxCount() // Load inbox count on mount
   }, [])
+
+  // Auto-refresh inbox count every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchInboxCount()
+    }, 30000) // 30 seconds
+    return () => clearInterval(interval)
+  }, [])
+
+  const fetchInboxCount = async () => {
+    try {
+      const res = await fetch(`/api/communication/inbox`)
+      if (res.ok) {
+        const data = await res.json()
+        setInboxMessages(data)
+      }
+    } catch (error) {
+      console.error('Failed to fetch inbox count:', error)
+    }
+  }
 
   useEffect(() => {
     if (activeTab === 'leads') {
