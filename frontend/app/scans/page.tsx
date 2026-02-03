@@ -198,6 +198,7 @@ export default function ScansPage() {
   
   // Pipeline stats for each scan
   const [pipelineStats, setPipelineStats] = useState<Record<number, {
+    is_running: boolean
     total: number
     completed: number
     progress_percent: number
