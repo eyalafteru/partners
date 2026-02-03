@@ -64,6 +64,7 @@ services:
         condition: service_healthy
     volumes:
       - backend-data:/app/data
+      - ../backend/app:/app/app:ro  # Mount code for hot reload
     networks:
       - partnercalc-network
     healthcheck:
