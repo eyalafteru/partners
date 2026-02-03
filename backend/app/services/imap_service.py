@@ -268,15 +268,17 @@ class IMAPService:
         return emails
     
     def fetch_unread_emails(self, folder: str = "INBOX", limit: int = 50) -> List[Dict[str, Any]]:
-        """שליפת מיילים שלא נקראו בלבד"""
+        """שליפת מיילים חדשים - גם אלה שכבר נקראו (מהיום)"""
+        from datetime import datetime
         conn = self._connect()
         emails = []
         
         try:
             conn.select(folder)
             
-            # חיפוש רק לא נקראו
-            status, message_ids = conn.search(None, 'UNSEEN')
+            # חיפוש מיילים מהיום (גם אם נקראו) + לא נקראים מהעבר
+            today = datetime.now().strftime("%d-%b-%Y")
+            status, message_ids = conn.search(None, f'(OR UNSEEN (SINCE {today}))')
             
             if status != "OK":
                 return []
@@ -286,7 +288,7 @@ class IMAPService:
             if len(id_list) > limit:
                 id_list = id_list[-limit:]
             
-            logger.info(f"📬 Found {len(id_list)} unread emails")
+            logger.info(f"📬 Found {len(id_list)} new/recent emails")
             
             for msg_id in id_list:
                 try:
