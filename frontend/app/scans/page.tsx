@@ -1323,43 +1323,11 @@ export default function ScansPage() {
                   צפייה בתוצאות
                 </button>
 
-                {/* AI Classification Button - show when has URLs */}
+                {/* GPT Match Calculators button - only for leads */}
                 {scan.total_urls > 0 && (
                   <div className="flex items-center gap-1">
-                    <button 
-                      onClick={() => startAIAnalysis(scan)}
-                      disabled={analyzingAI === scan.id || scanAIStats?.[scan.id]?.is_running}
-                      className={`btn flex items-center gap-1 ${
-                        analyzingAI === scan.id || scanAIStats?.[scan.id]?.is_running
-                          ? 'btn-secondary cursor-not-allowed opacity-70' 
-                          : 'bg-purple-600 hover:bg-purple-700 text-white'
-                      }`}
-                    >
-                      {analyzingAI === scan.id || scanAIStats?.[scan.id]?.is_running ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          מסווג AI...
-                        </>
-                      ) : (
-                        <>🤖 סיווג AI ({(scan.has_content || 0) - (scan.ai_analyzed || 0)})</>
-                      )}
-                    </button>
-                    
-                    {/* Stop AI button - only show when running */}
-                    {scanAIStats?.[scan.id]?.is_running && (
-                      <button 
-                        onClick={() => stopAIAnalysis(scan.id)}
-                        className="btn bg-red-500 hover:bg-red-600 text-white flex items-center gap-1"
-                        title="עצור סיווג AI"
-                      >
-                        🛑
-                      </button>
-                    )}
-                    
-                    {/* Old buttons removed - pipeline is now automatic */}
-
-                    {/* GPT Match Calculators button */}
-                    {scan.status === 'completed' && (scan.ai_analyzed || 0) > 0 && (
+                    {/* GPT Match - only shows when there are leads */}
+                    {(pipelineStats[scan.id]?.leads_created || 0) > 0 && (
                       <button 
                         onClick={() => startMatchCalculatorsGPT(scan.id)}
                         disabled={scan.gpt_match_status === 'running' || gptMatchStatus[scan.id]?.is_running}
@@ -1887,43 +1855,7 @@ export default function ScansPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {/* AI Analysis Buttons */}
-                <div className="flex items-center gap-2 border-l pl-3 ml-2">
-                  <button 
-                    onClick={() => startAIAnalysis(selectedScan)}
-                    disabled={analyzingAI === selectedScan.id}
-                    className={`btn text-sm flex items-center gap-1 ${
-                      analyzingAI === selectedScan.id 
-                        ? 'btn-secondary cursor-not-allowed opacity-70' 
-                        : 'bg-purple-600 hover:bg-purple-700 text-white'
-                    }`}
-                  >
-                    {analyzingAI === selectedScan.id ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        מנתח...
-                      </>
-                    ) : (
-                      <>🤖 סווג הכל</>
-                    )}
-                  </button>
-                  
-                  <button 
-                    onClick={startAIAnalysisSelected}
-                    disabled={analyzingAI === selectedScan.id || selectedResults.size === 0}
-                    className={`btn text-sm flex items-center gap-1 ${
-                      selectedResults.size === 0
-                        ? 'btn-secondary cursor-not-allowed opacity-50' 
-                        : 'bg-purple-500 hover:bg-purple-600 text-white'
-                    }`}
-                  >
-                    {selectedAlreadyAnalyzed > 0 ? (
-                      <>🔄 נתח מחדש ({selectedAlreadyAnalyzed}) + חדשים ({selectedNotAnalyzed})</>
-                    ) : (
-                      <>🎯 סווג נבחרים ({selectedResults.size})</>
-                    )}
-                  </button>
-                </div>
+                {/* Refresh and Close buttons */}
                 <button 
                   onClick={() => viewResults(selectedScan)}
                   className="btn btn-secondary text-sm flex items-center gap-1"
@@ -1939,45 +1871,6 @@ export default function ScansPage() {
                 </button>
               </div>
             </div>
-            
-            {/* AI Stats Bar */}
-            {aiStats && (
-              <div className="px-4 py-2 bg-purple-50 border-b">
-                {/* Real-time progress */}
-                {aiStats.is_running && (
-                  <div className="flex items-center gap-3 mb-2 pb-2 border-b border-purple-200">
-                    <Loader2 className="w-4 h-4 animate-spin text-purple-600" />
-                    <span className="font-medium text-purple-800">
-                      🤖 מנתח [{aiStats.ai_processed}/{aiStats.ai_total}]:
-                    </span>
-                    <span className="text-purple-600 font-mono">
-                      {aiStats.ai_current_domain}
-                    </span>
-                    <div className="flex-1 bg-purple-200 rounded-full h-2 ml-2">
-                      <div 
-                        className="bg-purple-600 h-2 rounded-full transition-all duration-300"
-                        style={{width: `${aiStats.ai_total ? (aiStats.ai_processed! / aiStats.ai_total) * 100 : 0}%`}}
-                      />
-                    </div>
-                  </div>
-                )}
-                
-                {/* Stats */}
-                <div className="flex flex-wrap items-center gap-3 text-sm">
-                  <span className="font-medium text-purple-800">📊 סיכום:</span>
-                  <span className="text-emerald-600 font-bold">🎯 לידים: {aiStats.type_counts?.lead_site || 0}</span>
-                  <span className="text-green-600 font-bold">💼 עסק קטן: {aiStats.type_counts?.small_business || 0}</span>
-                  <span className="text-teal-600">📰 תוכן: {aiStats.type_counts?.content_site || 0}</span>
-                  <span className="text-gray-400">|</span>
-                  <span className="text-blue-500">🏦 בנק: {aiStats.type_counts?.bank || 0}</span>
-                  <span className="text-orange-500">🛡️ ביטוח: {aiStats.type_counts?.insurance || 0}</span>
-                  <span className="text-red-500">🏢 תאגיד: {aiStats.type_counts?.corporation || 0}</span>
-                  <span className="text-purple-500">🚀 פינטק: {aiStats.type_counts?.fintech || 0}</span>
-                  <span className="text-gray-400">|</span>
-                  <span className="text-gray-500">❓ ממתין: {aiStats.not_analyzed || 0}</span>
-                </div>
-              </div>
-            )}
             
             <div className="flex-1 overflow-y-auto p-4">
               {loadingResults ? (
