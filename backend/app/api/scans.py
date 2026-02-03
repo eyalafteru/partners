@@ -887,6 +887,152 @@ async def create_scan(
     )
 
 
+class ScanUpdate(BaseModel):
+    """סכמה לעדכון סריקה"""
+    name: Optional[str] = None
+    results_per_query: Optional[int] = None
+
+
+class AddKeywordsRequest(BaseModel):
+    """סכמה להוספת מילות מפתח"""
+    keywords: List[str]
+    auto_start: bool = True
+
+
+@router.put("/{scan_id}")
+async def update_scan(
+    scan_id: int,
+    data: ScanUpdate,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    עדכון הגדרות סריקה
+    """
+    result = await session.execute(
+        select(ScanCampaign).where(ScanCampaign.id == scan_id)
+    )
+    campaign = result.scalar_one_or_none()
+    
+    if not campaign:
+        raise HTTPException(status_code=404, detail="סריקה לא נמצאה")
+    
+    if data.name:
+        campaign.name = data.name
+    
+    if data.results_per_query and data.results_per_query in [50, 100, 150, 200]:
+        campaign.results_per_query = data.results_per_query
+    
+    await session.commit()
+    
+    return {"message": "הסריקה עודכנה בהצלחה", "scan_id": scan_id}
+
+
+@router.post("/{scan_id}/add-keywords")
+async def add_keywords_to_scan(
+    scan_id: int,
+    data: AddKeywordsRequest,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    הוספת מילות מפתח חדשות לסריקה קיימת
+    מסנן כפילויות של דומיינים
+    """
+    from urllib.parse import urlparse
+    
+    result = await session.execute(
+        select(ScanCampaign).where(ScanCampaign.id == scan_id)
+    )
+    campaign = result.scalar_one_or_none()
+    
+    if not campaign:
+        raise HTTPException(status_code=404, detail="סריקה לא נמצאה")
+    
+    # Get existing domains in this campaign
+    existing_result = await session.execute(
+        select(ScanQueue.domain).where(ScanQueue.campaign_id == scan_id)
+    )
+    existing_domains = set(r[0] for r in existing_result.all() if r[0])
+    
+    logger.info(f"📊 Campaign {scan_id} has {len(existing_domains)} existing domains")
+    
+    # Update keywords list
+    current_keywords = campaign.keywords or []
+    new_keywords = [k.strip() for k in data.keywords if k.strip() and k.strip() not in current_keywords]
+    campaign.keywords = current_keywords + new_keywords
+    
+    await session.commit()
+    
+    if not data.auto_start:
+        return {
+            "message": f"נוספו {len(new_keywords)} מילות מפתח חדשות",
+            "new_keywords": new_keywords,
+            "total_keywords": len(campaign.keywords)
+        }
+    
+    # Run Apify scan for new keywords
+    apify = get_apify_scraper()
+    new_urls_added = 0
+    duplicates_skipped = 0
+    
+    for keyword in new_keywords:
+        try:
+            urls = await apify.search_google(
+                keyword, 
+                max_results=campaign.results_per_query or 100
+            )
+            
+            for url_data in urls:
+                url = url_data.get("url", "")
+                try:
+                    parsed = urlparse(url)
+                    domain = parsed.netloc.replace("www.", "")
+                    
+                    # Skip if domain already exists
+                    if domain in existing_domains:
+                        duplicates_skipped += 1
+                        continue
+                    
+                    # Add new domain
+                    existing_domains.add(domain)
+                    
+                    queue_item = ScanQueue(
+                        campaign_id=scan_id,
+                        url=url,
+                        domain=domain,
+                        title=url_data.get("title", ""),
+                        description=url_data.get("description", ""),
+                        google_position=url_data.get("position", 0),
+                        status="pending"
+                    )
+                    session.add(queue_item)
+                    new_urls_added += 1
+                    
+                except Exception as e:
+                    logger.warning(f"Error parsing URL {url}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error scanning keyword '{keyword}': {e}")
+    
+    await session.commit()
+    
+    # Update campaign counts
+    total_result = await session.execute(
+        select(func.count(ScanQueue.id)).where(ScanQueue.campaign_id == scan_id)
+    )
+    campaign.total_urls = total_result.scalar_one()
+    await session.commit()
+    
+    logger.info(f"✅ Added {new_urls_added} new URLs, skipped {duplicates_skipped} duplicates")
+    
+    return {
+        "message": f"נוספו {new_urls_added} דומיינים חדשים",
+        "new_keywords": new_keywords,
+        "new_urls": new_urls_added,
+        "duplicates_skipped": duplicates_skipped,
+        "total_urls": campaign.total_urls
+    }
+
+
 @router.post("/{scan_id}/start")
 async def start_scan(
     scan_id: int,

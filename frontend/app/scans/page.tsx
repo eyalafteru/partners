@@ -149,6 +149,8 @@ export default function ScansPage() {
   const [loading, setLoading] = useState(true)
   const [backgroundRefresh, setBackgroundRefresh] = useState(false)
   const [showModal, setShowModal] = useState(false)
+  const [editingScan, setEditingScan] = useState<Scan | null>(null)
+  const [addKeywordsScan, setAddKeywordsScan] = useState<Scan | null>(null)
   const [selectedScan, setSelectedScan] = useState<Scan | null>(null)
   const [scanResults, setScanResults] = useState<ScanResult[]>([])
   const [loadingResults, setLoadingResults] = useState(false)
@@ -984,9 +986,26 @@ export default function ScansPage() {
                     {new Date(scan.created_at).toLocaleDateString('he-IL')}
                   </p>
                 </div>
-                <span className={`badge ${statusColors[scan.status]}`}>
-                  {statusLabels[scan.status]}
-                </span>
+                <div className="flex items-center gap-2">
+                  {/* Edit & Add Keywords buttons */}
+                  <button
+                    onClick={() => setEditingScan(scan)}
+                    className="text-gray-400 hover:text-blue-600 p-1"
+                    title="ערוך סריקה"
+                  >
+                    ✏️
+                  </button>
+                  <button
+                    onClick={() => setAddKeywordsScan(scan)}
+                    className="text-gray-400 hover:text-green-600 p-1"
+                    title="הוסף מילות חיפוש"
+                  >
+                    ➕
+                  </button>
+                  <span className={`badge ${statusColors[scan.status]}`}>
+                    {statusLabels[scan.status]}
+                  </span>
+                </div>
               </div>
 
               {/* Keywords */}
@@ -1684,6 +1703,24 @@ export default function ScansPage() {
         />
       )}
 
+      {/* Edit Scan Modal */}
+      {editingScan && (
+        <EditScanModal
+          scan={editingScan}
+          onClose={() => setEditingScan(null)}
+          onUpdated={fetchScans}
+        />
+      )}
+
+      {/* Add Keywords Modal */}
+      {addKeywordsScan && (
+        <AddKeywordsModal
+          scan={addKeywordsScan}
+          onClose={() => setAddKeywordsScan(null)}
+          onAdded={fetchScans}
+        />
+      )}
+
       {/* Results Modal with Live Status */}
       {selectedScan && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2">
@@ -2242,6 +2279,228 @@ function ScanModal({
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  )
+}
+
+
+// ========== Edit Scan Modal ==========
+function EditScanModal({
+  scan,
+  onClose,
+  onUpdated
+}: {
+  scan: Scan
+  onClose: () => void
+  onUpdated: () => void
+}) {
+  const [form, setForm] = useState({
+    name: scan.name,
+    results_per_keyword: scan.results_per_keyword || 100
+  })
+  const [submitting, setSubmitting] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitting(true)
+
+    try {
+      const response = await fetch(`/api/scans/${scan.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: form.name,
+          results_per_query: form.results_per_keyword
+        })
+      })
+
+      if (response.ok) {
+        onUpdated()
+        onClose()
+      }
+    } catch (error) {
+      console.error('Failed to update scan:', error)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg w-full max-w-lg p-6">
+        <h2 className="text-xl font-bold mb-4">✏️ עריכת סריקה</h2>
+        
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="label">שם הסריקה</label>
+            <input
+              type="text"
+              className="input"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              required
+            />
+          </div>
+
+          <div>
+            <label className="label">תוצאות לכל שאילתה (לסריקות עתידיות)</label>
+            <select
+              className="input"
+              value={form.results_per_keyword}
+              onChange={(e) => setForm({ ...form, results_per_keyword: parseInt(e.target.value) })}
+            >
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={150}>150</option>
+              <option value={200}>200</option>
+            </select>
+          </div>
+
+          <div className="bg-gray-50 p-3 rounded-lg text-sm text-gray-600">
+            <strong>מילות מפתח נוכחיות:</strong>
+            <div className="flex flex-wrap gap-1 mt-2">
+              {scan.keywords?.map((kw, i) => (
+                <span key={i} className="text-xs px-2 py-1 bg-white border rounded">
+                  {kw}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex gap-2 pt-4">
+            <button type="button" onClick={onClose} className="btn btn-secondary flex-1">
+              ביטול
+            </button>
+            <button type="submit" disabled={submitting} className="btn btn-primary flex-1">
+              {submitting ? 'מעדכן...' : 'שמור שינויים'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+
+// ========== Add Keywords Modal ==========
+function AddKeywordsModal({
+  scan,
+  onClose,
+  onAdded
+}: {
+  scan: Scan
+  onClose: () => void
+  onAdded: () => void
+}) {
+  const [keywords, setKeywords] = useState('')
+  const [autoStart, setAutoStart] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [result, setResult] = useState<{
+    new_urls: number
+    duplicates_skipped: number
+  } | null>(null)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitting(true)
+    setResult(null)
+
+    try {
+      const response = await fetch(`/api/scans/${scan.id}/add-keywords`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          keywords: keywords.split('\n').map(k => k.trim()).filter(Boolean),
+          auto_start: autoStart
+        })
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        setResult(data)
+        onAdded()
+        
+        // Close after showing result
+        setTimeout(() => {
+          onClose()
+        }, 3000)
+      }
+    } catch (error) {
+      console.error('Failed to add keywords:', error)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg w-full max-w-lg p-6">
+        <h2 className="text-xl font-bold mb-4">➕ הוסף מילות חיפוש ל: {scan.name}</h2>
+        
+        {result ? (
+          <div className="text-center py-8">
+            <div className="text-6xl mb-4">✅</div>
+            <p className="text-lg font-medium text-green-600">
+              נוספו {result.new_urls} דומיינים חדשים!
+            </p>
+            {result.duplicates_skipped > 0 && (
+              <p className="text-sm text-gray-500 mt-2">
+                {result.duplicates_skipped} כפילויות סוננו אוטומטית
+              </p>
+            )}
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="bg-blue-50 p-3 rounded-lg text-sm">
+              <p className="font-medium text-blue-700 mb-1">📊 סריקה קיימת:</p>
+              <p className="text-blue-600">
+                {scan.total_urls} דומיינים | {scan.keywords?.length || 0} מילות מפתח
+              </p>
+              <p className="text-xs text-blue-500 mt-1">
+                כפילויות יסוננו אוטומטית - רק דומיינים חדשים יתווספו!
+              </p>
+            </div>
+
+            <div>
+              <label className="label">מילות חיפוש חדשות (שאילתה אחת בכל שורה)</label>
+              <textarea
+                className="input h-32"
+                value={keywords}
+                onChange={(e) => setKeywords(e.target.value)}
+                placeholder="מחשבון משכנתא&#10;חישוב הלוואה&#10;מחשבון ביטוח"
+                required
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="auto_start_add"
+                checked={autoStart}
+                onChange={(e) => setAutoStart(e.target.checked)}
+                className="w-4 h-4"
+              />
+              <label htmlFor="auto_start_add">סרוק מיד (Apify)</label>
+            </div>
+
+            <div className="flex gap-2 pt-4">
+              <button type="button" onClick={onClose} className="btn btn-secondary flex-1">
+                ביטול
+              </button>
+              <button type="submit" disabled={submitting} className="btn btn-primary flex-1">
+                {submitting ? (
+                  <span className="flex items-center gap-2 justify-center">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    סורק...
+                  </span>
+                ) : (
+                  '➕ הוסף וסרוק'
+                )}
+              </button>
+            </div>
+          </form>
+        )}
       </div>
     </div>
   )
