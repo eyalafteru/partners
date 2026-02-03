@@ -958,96 +958,7 @@ export default function ScansPage() {
 
       {/* GPU Control Bar - REMOVED - Using external APIs only */}
 
-      {/* Global Activity Status */}
-      {(scans.some(s => s.status === 'running' && s.scanned_count < s.total_urls) || 
-        Object.values(scanAIStats).some(s => s?.is_running) ||
-        scans.some(s => s.rescan_status === 'running') ||
-        scans.some(s => s.ai_current_domain?.startsWith('סורק תוכן'))) && (
-        <div className="card p-4 bg-gradient-to-r from-purple-50 via-blue-50 to-green-50 border border-purple-200">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-lg">📡</span>
-            <span className="font-bold text-gray-800">פעילות נוכחית</span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {/* Apify Scans */}
-            <div className="bg-white rounded-lg p-3 border">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-green-600">🔍</span>
-                <span className="font-medium text-sm">סריקות Apify</span>
-              </div>
-              {scans.filter(s => s.status === 'running' && s.scanned_count < s.total_urls).length > 0 ? (
-                scans.filter(s => s.status === 'running' && s.scanned_count < s.total_urls).map(scan => (
-                  <div key={scan.id} className="text-xs flex items-center gap-2 py-1">
-                    <Loader2 className="w-3 h-3 animate-spin text-green-500" />
-                    <span className="font-medium">{scan.name}</span>
-                    <span className="text-gray-500">({scan.scanned_count}/{scan.total_urls})</span>
-                  </div>
-                ))
-              ) : (
-                <div className="text-xs text-gray-400">אין סריקות פעילות</div>
-              )}
-            </div>
-            
-            {/* Content + Navigation Rescan - REMOVED */}
-            
-            {/* AI Classification */}
-            <div className="bg-white rounded-lg p-3 border">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-purple-600">🤖</span>
-                <span className="font-medium text-sm">סיווג AI</span>
-              </div>
-              {Object.entries(scanAIStats).filter(([_, s]) => s?.is_running).length > 0 ? (
-                Object.entries(scanAIStats).filter(([_, s]) => s?.is_running).map(([scanId, stats]) => {
-                  const scan = scans.find(s => s.id === parseInt(scanId))
-                  return (
-                    <div key={scanId} className="text-xs flex items-center gap-2 py-1">
-                      <Loader2 className="w-3 h-3 animate-spin text-purple-500" />
-                      <span className="font-medium">{scan?.name || `סריקה ${scanId}`}</span>
-                      <span className="text-gray-500">({stats?.ai_processed}/{stats?.ai_total})</span>
-                    </div>
-                  )
-                })
-              ) : (
-                <div className="text-xs text-gray-400">אין סיווג AI פעיל</div>
-              )}
-            </div>
-            
-            {/* Deep Scan - REMOVED */}
-            
-            {/* Calculator Matching (Ollama) - REMOVED */}
-
-            {/* GPT Calculator Matching */}
-            <div className="bg-white rounded-lg p-3 border">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-green-600">⚡</span>
-                <span className="font-medium text-sm">GPT התאמה</span>
-              </div>
-              {Object.entries(gptMatchStatus).filter(([_, s]) => s.is_running).length > 0 ? (
-                Object.entries(gptMatchStatus)
-                  .filter(([_, s]) => s.is_running)
-                  .map(([scanId, status]) => (
-                    <div key={scanId} className="text-xs">
-                      <div className="flex items-center gap-2 py-1">
-                        <Loader2 className="w-3 h-3 animate-spin text-green-500" />
-                        <span className="font-medium">{status.current_site || '...'}</span>
-                        <span className="text-gray-500">({status.processed || 0}/{status.total || 0})</span>
-                      </div>
-                      {status.logs?.length > 0 && (
-                        <div className="text-xs text-gray-500 mt-1">
-                          {status.logs.slice(-3).map((log: string, i: number) => (
-                            <div key={i} className="truncate">{log}</div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))
-              ) : (
-                <div className="text-xs text-gray-400">אין התאמות GPT פעילות</div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Global Activity Status - REMOVED - Using simplified pipeline */}
 
       {/* רשימת סריקות */}
       <div className="space-y-4">
@@ -1164,13 +1075,6 @@ export default function ScansPage() {
                     <span className="text-sm text-gray-400 font-normal">/{scan.total_urls}</span>
                   </div>
                   <div className="text-xs text-gray-500">🤖 נותחו AI</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-lg font-semibold text-pink-600">
-                    {scan.calc_matched || 0}
-                    <span className="text-sm text-gray-400 font-normal">/{scan.has_content || 0}</span>
-                  </div>
-                  <div className="text-xs text-gray-500">🔢 שויכו (Ollama)</div>
                 </div>
                 <div className="text-center">
                   <div className="text-lg font-semibold text-emerald-600">
@@ -1486,60 +1390,7 @@ export default function ScansPage() {
         )}
       </div>
 
-      {/* Global Rescan Status */}
-      {globalRescanStatus?.is_running && (
-        <div className="card mt-8 bg-blue-50 border-blue-200">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-bold text-blue-800 flex items-center gap-2">
-              <Loader2 className="w-5 h-5 animate-spin" />
-              סריקה גלובלית פועלת - {globalRescanStatus.phase === 'rescan' ? 'שלב סריקת תוכן' : 'שלב התאמת מחשבונים'}
-            </h3>
-            <button
-              onClick={stopGlobalRescan}
-              className="btn btn-secondary text-sm bg-red-100 text-red-700 hover:bg-red-200"
-            >
-              עצור
-            </button>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-4 mb-3">
-            <div className="bg-white rounded p-3">
-              <div className="text-sm text-gray-600">סריקת תוכן</div>
-              <div className="text-lg font-bold text-blue-700">
-                {globalRescanStatus.rescan_processed}/{globalRescanStatus.rescan_total}
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
-                <div 
-                  className="bg-blue-500 h-2 rounded-full transition-all"
-                  style={{ width: `${globalRescanStatus.rescan_total > 0 ? (globalRescanStatus.rescan_processed / globalRescanStatus.rescan_total) * 100 : 0}%` }}
-                />
-              </div>
-            </div>
-            <div className="bg-white rounded p-3">
-              <div className="text-sm text-gray-600">התאמת מחשבונים</div>
-              <div className="text-lg font-bold text-green-700">
-                {globalRescanStatus.match_processed}/{globalRescanStatus.match_total}
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
-                <div 
-                  className="bg-green-500 h-2 rounded-full transition-all"
-                  style={{ width: `${globalRescanStatus.match_total > 0 ? (globalRescanStatus.match_processed / globalRescanStatus.match_total) * 100 : 0}%` }}
-                />
-              </div>
-            </div>
-          </div>
-          
-          <div className="text-sm text-blue-700 mb-2">
-            <strong>כרגע:</strong> {globalRescanStatus.current_site}
-          </div>
-          
-          <div className="bg-gray-900 text-green-400 p-3 rounded text-xs font-mono max-h-32 overflow-y-auto">
-            {globalRescanStatus.logs.slice(-10).map((log, idx) => (
-              <div key={idx}>{log}</div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Global Rescan Status - REMOVED */}
 
       {/* All Domains Section */}
       <div className="card mt-8">
@@ -1549,21 +1400,7 @@ export default function ScansPage() {
             <span className="text-sm font-normal text-gray-500">({totalDomains} יוניקים)</span>
           </h2>
           <div className="flex items-center gap-3 flex-wrap">
-            {/* Global Rescan Button */}
-            <button
-              onClick={startGlobalRescan}
-              disabled={globalRescanStatus?.is_running}
-              className="btn btn-primary text-sm bg-purple-600 hover:bg-purple-700 disabled:opacity-50"
-            >
-              {globalRescanStatus?.is_running ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin mr-1" />
-                  סורק...
-                </>
-              ) : (
-                '🔄 סרוק ללא תוכן + התאם'
-              )}
-            </button>
+            {/* Global Rescan Button - REMOVED */}
             
             {/* Status Filter */}
             <select
