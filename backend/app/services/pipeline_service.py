@@ -400,7 +400,7 @@ class PipelineService:
         if not best_phone and item.phones_found:
             best_phone = item.phones_found[0]
         
-        # Create lead
+        # Create lead (email/phone are @property, accessed via contact_info)
         lead = Lead(
             domain=item.domain,
             site_name=item.owner_org or item.title or item.domain,
@@ -411,11 +411,8 @@ class PipelineService:
                 "whois_name": item.owner_name,
                 "whois_org": item.owner_org,
             },
-            email=best_email,
-            phone=best_phone,
             source_campaign_id=item.campaign_id,
             status="new",
-            priority=2 if item.business_type == "lead_site" else 1,
         )
         
         session.add(lead)
