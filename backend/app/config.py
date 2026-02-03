@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     twilio_auth_token: str = ""
     twilio_phone_number: str = ""
     
+    # ========== WhatsApp - Green API ==========
+    greenapi_url: str = "https://7105.api.greenapi.com"
+    greenapi_instance_id: str = ""
+    greenapi_api_token: str = ""
+    greenapi_notify_phone: str = ""  # Phone number to receive notifications (e.g. 972509543601)
+    
     # ========== Scraping - Apify ==========
     apify_token: str = ""  # Set via APIFY_TOKEN env variable
     

@@ -1,185 +1,79 @@
 """
-PartnerCalc OS - WhatsApp Service
-שליחת הודעות WhatsApp דרך Green-API
+PartnerCalc OS - WhatsApp Notification Service
+שליחת התראות WhatsApp דרך Green API
 """
 import httpx
-from typing import Optional, Dict, Any
 from loguru import logger
-
 from app.config import settings
 
 
 class WhatsAppService:
-    """
-    שירות שליחת WhatsApp דרך Green-API
-    https://green-api.com/
-    """
+    """שירות שליחת הודעות WhatsApp דרך Green API"""
     
-    def __init__(self, instance_id: str = None, token: str = None):
-        self.instance_id = instance_id or settings.green_api_instance
-        self.token = token or settings.green_api_token
-        self.base_url = f"https://api.green-api.com/waInstance{self.instance_id}"
+    def __init__(self):
+        self.api_url = settings.greenapi_url
+        self.instance_id = settings.greenapi_instance_id
+        self.api_token = settings.greenapi_api_token
+        self.notify_phone = settings.greenapi_notify_phone
     
-    async def send_message(
-        self,
-        phone: str,
-        message: str
-    ) -> Dict[str, Any]:
-        """
-        שליחת הודעת WhatsApp
-        
-        Args:
-            phone: מספר טלפון (עם או בלי קידומת)
-            message: תוכן ההודעה
-        
-        Returns:
-            {
-                "success": True/False,
-                "message_id": "...",
-                "error": "..."
-            }
-        """
-        # נרמול מספר טלפון
-        phone = self._normalize_phone(phone)
-        
-        url = f"{self.base_url}/sendMessage/{self.token}"
-        
-        payload = {
-            "chatId": f"{phone}@c.us",
-            "message": message
-        }
-        
-        logger.info(f"Sending WhatsApp to {phone}")
+    @property
+    def is_configured(self) -> bool:
+        """בדיקה אם השירות מוגדר"""
+        return bool(self.api_url and self.instance_id and self.api_token and self.notify_phone)
+    
+    async def send_notification(self, message: str) -> bool:
+        """שליחת הודעת WhatsApp"""
+        if not self.is_configured:
+            logger.warning("📱 WhatsApp not configured - skipping notification")
+            return False
         
         try:
+            url = f"{self.api_url}/waInstance{self.instance_id}/sendMessage/{self.api_token}"
+            
+            # פורמט מספר הטלפון (צריך להיות עם קידומת מדינה, בלי +)
+            phone = self.notify_phone.replace("+", "").replace("-", "").replace(" ", "")
+            if not phone.endswith("@c.us"):
+                phone = f"{phone}@c.us"
+            
+            payload = {
+                "chatId": phone,
+                "message": message
+            }
+            
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.post(url, json=payload)
-                result = response.json()
-                
-                if response.status_code == 200 and result.get("idMessage"):
-                    logger.info(f"WhatsApp sent successfully: {result['idMessage']}")
-                    return {
-                        "success": True,
-                        "message_id": result["idMessage"]
-                    }
-                else:
-                    error = result.get("message", "Unknown error")
-                    logger.error(f"WhatsApp send failed: {error}")
-                    return {
-                        "success": False,
-                        "error": error
-                    }
-                    
-        except Exception as e:
-            logger.error(f"WhatsApp error: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def send_file(
-        self,
-        phone: str,
-        file_url: str,
-        filename: str,
-        caption: str = None
-    ) -> Dict[str, Any]:
-        """
-        שליחת קובץ ב-WhatsApp
-        """
-        phone = self._normalize_phone(phone)
-        
-        url = f"{self.base_url}/sendFileByUrl/{self.token}"
-        
-        payload = {
-            "chatId": f"{phone}@c.us",
-            "urlFile": file_url,
-            "fileName": filename
-        }
-        
-        if caption:
-            payload["caption"] = caption
-        
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                response = await client.post(url, json=payload)
-                result = response.json()
                 
                 if response.status_code == 200:
-                    return {"success": True, "message_id": result.get("idMessage")}
+                    logger.info(f"📱 ✅ WhatsApp notification sent successfully")
+                    return True
                 else:
-                    return {"success": False, "error": result.get("message")}
-                    
+                    logger.error(f"📱 ❌ WhatsApp send failed: {response.status_code} - {response.text}")
+                    return False
+        
         except Exception as e:
-            return {"success": False, "error": str(e)}
-    
-    async def check_phone(self, phone: str) -> bool:
-        """
-        בדיקה אם מספר טלפון מחובר ל-WhatsApp
-        """
-        phone = self._normalize_phone(phone)
-        
-        url = f"{self.base_url}/checkWhatsapp/{self.token}"
-        
-        payload = {
-            "phoneNumber": int(phone)
-        }
-        
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.post(url, json=payload)
-                result = response.json()
-                
-                return result.get("existsWhatsapp", False)
-                
-        except Exception as e:
-            logger.error(f"Check WhatsApp error: {e}")
+            logger.error(f"📱 ❌ WhatsApp error: {e}")
             return False
     
-    async def get_state(self) -> Dict[str, Any]:
-        """
-        בדיקת מצב החשבון
-        """
-        url = f"{self.base_url}/getStateInstance/{self.token}"
+    async def send_new_email_alert(self, from_email: str, subject: str, lead_domain: str = None):
+        """שליחת התראה על מייל חדש"""
+        message = f"""🔔 *מייל חדש התקבל!*
+
+📧 *מאת:* {from_email}
+📝 *נושא:* {subject}
+🌐 *אתר:* {lead_domain or 'לא ידוע'}
+
+👉 כנס למערכת לצפייה:
+http://partners.ppcmedia.co.il/leads"""
         
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.get(url)
-                return response.json()
-        except Exception as e:
-            return {"error": str(e)}
-    
-    async def verify_connection(self) -> bool:
-        """
-        בדיקה אם החשבון מחובר
-        """
-        state = await self.get_state()
-        return state.get("stateInstance") == "authorized"
-    
-    def _normalize_phone(self, phone: str) -> str:
-        """
-        נרמול מספר טלפון לפורמט ישראלי
-        """
-        # הסרת תווים מיותרים
-        phone = phone.replace("-", "").replace(" ", "").replace("+", "")
-        
-        # הסרת 972 או 0 בהתחלה והוספת 972
-        if phone.startswith("972"):
-            pass  # כבר בפורמט נכון
-        elif phone.startswith("0"):
-            phone = "972" + phone[1:]
-        else:
-            phone = "972" + phone
-        
-        return phone
+        return await self.send_notification(message)
 
 
 # Singleton
-_whatsapp_service: Optional[WhatsAppService] = None
+_whatsapp_service = None
 
 
 def get_whatsapp_service() -> WhatsAppService:
-    """קבלת instance של WhatsApp service"""
+    """קבלת instance של WhatsApp Service"""
     global _whatsapp_service
     if _whatsapp_service is None:
         _whatsapp_service = WhatsAppService()

@@ -129,6 +129,9 @@ class EmailSyncTask:
                     await session.commit()
                     logger.info(f"📬 ✅ Email saved for lead {lead.id}: {subject}")
                     
+                    # ========== WHATSAPP NOTIFICATION ==========
+                    await self._send_whatsapp_alert(from_email, subject, lead.domain)
+                    
                     # ========== AUTO-REPLY LOGIC ==========
                     await self._handle_auto_reply(
                         session, lead, from_email, subject, body,
@@ -236,6 +239,17 @@ class EmailSyncTask:
             logger.error(f"📬 Auto-reply error: {e}")
             import traceback
             logger.debug(traceback.format_exc())
+    
+    async def _send_whatsapp_alert(self, from_email: str, subject: str, lead_domain: str = None):
+        """שליחת התראת WhatsApp על מייל חדש"""
+        try:
+            from app.services.whatsapp_service import get_whatsapp_service
+            
+            whatsapp = get_whatsapp_service()
+            if whatsapp.is_configured:
+                await whatsapp.send_new_email_alert(from_email, subject, lead_domain)
+        except Exception as e:
+            logger.error(f"📱 Failed to send WhatsApp alert: {e}")
 
 
 # Singleton instance
