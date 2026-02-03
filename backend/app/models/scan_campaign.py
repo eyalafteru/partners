@@ -5,8 +5,32 @@ PartnerCalc OS - Scan Campaign Model
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, Float
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
+from enum import IntEnum
 
 from app.database import Base
+
+
+class PipelineStage(IntEnum):
+    """Pipeline stages for scan processing"""
+    PENDING = 0       # URL collected by Apify
+    SCRAPED = 1       # Content scraped by ZenRows
+    CLASSIFIED = 2    # GPT analyzed (small_business/bank/etc)
+    WHOIS_DONE = 3    # WHOIS lookup completed
+    LEAD_CREATED = 4  # Lead created successfully
+    FILTERED = 5      # Filtered out (bank/insurance/etc)
+    FAILED = 6        # Failed after 3 retries
+
+
+# Hebrew labels for UI
+PIPELINE_STAGE_LABELS = {
+    PipelineStage.PENDING: "ממתין",
+    PipelineStage.SCRAPED: "תוכן נסרק",
+    PipelineStage.CLASSIFIED: "סווג",
+    PipelineStage.WHOIS_DONE: "WHOIS נבדק",
+    PipelineStage.LEAD_CREATED: "ליד נוצר",
+    PipelineStage.FILTERED: "סונן",
+    PipelineStage.FAILED: "נכשל",
+}
 
 
 class ScanCampaign(Base):
@@ -172,6 +196,12 @@ class ScanQueue(Base):
     gpt_match_duration_seconds = Column(Float, comment="כמה שניות לקחה ההתאמה GPT")
     gpt_suggested_new_calc = Column(Text, comment="הצעה GPT למחשבון חדש")
     
+    # ========== Pipeline Stage (NEW) ==========
+    pipeline_stage = Column(Integer, default=0, index=True, 
+                           comment="Pipeline stage: 0=pending, 1=scraped, 2=classified, 3=whois_done, 4=lead_created, 5=filtered, 6=failed")
+    retry_count = Column(Integer, default=0, comment="Number of retry attempts (max 3)")
+    stage_updated_at = Column(DateTime(timezone=True), comment="When the pipeline stage was last updated")
+    
     # ========== תאריכים ==========
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     processed_at = Column(DateTime(timezone=True))
@@ -213,4 +243,27 @@ class ScanQueue(Base):
             self.best_email or 
             self.best_phone or 
             self.contact_form_url
+        )
+    
+    @property
+    def pipeline_stage_label(self) -> str:
+        """Get Hebrew label for current pipeline stage"""
+        stage = PipelineStage(self.pipeline_stage or 0)
+        return PIPELINE_STAGE_LABELS.get(stage, "לא ידוע")
+    
+    @property
+    def is_pipeline_complete(self) -> bool:
+        """Check if pipeline processing is complete (success or filtered or failed)"""
+        return self.pipeline_stage in [
+            PipelineStage.LEAD_CREATED,
+            PipelineStage.FILTERED,
+            PipelineStage.FAILED
+        ]
+    
+    @property
+    def can_retry(self) -> bool:
+        """Check if this item can be retried"""
+        return (
+            self.pipeline_stage == PipelineStage.FAILED and
+            (self.retry_count or 0) < 3
         )

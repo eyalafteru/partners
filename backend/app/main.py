@@ -65,6 +65,14 @@ async def lifespan(app: FastAPI):
     #     logger.warning(f"📧 Email Scheduler failed to start: {e}")
     logger.info("📧 Email Scheduler DISABLED - preventing DB locks")
     
+    # Resume incomplete pipelines on startup
+    try:
+        from app.services.pipeline_service import resume_incomplete_pipelines
+        asyncio.create_task(resume_incomplete_pipelines())
+        logger.info("🔄 Pipeline resume task started")
+    except Exception as e:
+        logger.warning(f"🔄 Pipeline resume failed to start: {e}")
+    
     yield
     
     # Shutdown

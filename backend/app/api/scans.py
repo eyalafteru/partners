@@ -13,7 +13,7 @@ from datetime import datetime
 from loguru import logger
 
 from app.database import get_async_session, AsyncSessionLocal
-from app.models.scan_campaign import ScanCampaign, ScanQueue
+from app.models.scan_campaign import ScanCampaign, ScanQueue, PipelineStage, PIPELINE_STAGE_LABELS
 from app.models.lead import Lead
 from app.scraper.apify_client import get_apify_scraper
 
@@ -3492,8 +3492,189 @@ async def load_model_to_gpu():
 async def unload_model_from_gpu():
     """
     הורדת המודל מה-GPU (משחרר זיכרון)
+    [DEPRECATED - Ollama removed, kept for backward compatibility]
     """
     from app.ai.ollama_client import get_ollama_client
     
     ollama = get_ollama_client()
     return await ollama.unload_model()
+
+
+# ========== NEW PIPELINE ENDPOINTS (v2) ==========
+
+@router.post("/{scan_id}/pipeline/start")
+async def start_pipeline(
+    scan_id: int,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    🚀 Start full pipeline for a scan
+    
+    This is the new simplified flow:
+    Apify (already done) -> ZenRows -> GPT Classification -> WHOIS -> Lead
+    
+    Runs in background with 5 concurrent URLs.
+    Use /pipeline/status to check progress.
+    """
+    import asyncio
+    from app.services.pipeline_service import PipelineService, PIPELINE_ACTIVE
+    
+    # Check if already running
+    if PIPELINE_ACTIVE.get(scan_id, False):
+        return {"status": "already_running", "message": "Pipeline already running"}
+    
+    # Verify scan exists
+    result = await session.execute(
+        select(ScanCampaign).where(ScanCampaign.id == scan_id)
+    )
+    scan = result.scalar_one_or_none()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    
+    # Start pipeline in background
+    service = PipelineService()
+    asyncio.create_task(service.run_pipeline(scan_id))
+    
+    return {
+        "status": "started",
+        "message": f"Pipeline started for scan {scan_id}",
+        "scan_name": scan.name
+    }
+
+
+@router.post("/{scan_id}/pipeline/stop")
+async def stop_pipeline(scan_id: int):
+    """
+    ⏹️ Stop running pipeline
+    """
+    from app.services.pipeline_service import PipelineService
+    
+    await PipelineService.stop_pipeline(scan_id)
+    return {"status": "stopping", "message": "Stop signal sent"}
+
+
+@router.get("/{scan_id}/pipeline/status")
+async def get_pipeline_status(
+    scan_id: int,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    📊 Get pipeline status with progress stats
+    
+    Returns counts for each pipeline stage.
+    """
+    from app.models.scan_campaign import PipelineStage, PIPELINE_STAGE_LABELS
+    from app.services.pipeline_service import PIPELINE_ACTIVE
+    
+    # Get counts by stage
+    result = await session.execute(
+        select(
+            ScanQueue.pipeline_stage,
+            func.count(ScanQueue.id).label('count')
+        )
+        .where(ScanQueue.campaign_id == scan_id)
+        .group_by(ScanQueue.pipeline_stage)
+    )
+    stage_counts = {row.pipeline_stage or 0: row.count for row in result.fetchall()}
+    
+    # Get total
+    total_result = await session.execute(
+        select(func.count(ScanQueue.id))
+        .where(ScanQueue.campaign_id == scan_id)
+    )
+    total = total_result.scalar() or 0
+    
+    # Build response
+    stages = {
+        "pending": stage_counts.get(PipelineStage.PENDING, 0),
+        "scraped": stage_counts.get(PipelineStage.SCRAPED, 0),
+        "classified": stage_counts.get(PipelineStage.CLASSIFIED, 0),
+        "whois_done": stage_counts.get(PipelineStage.WHOIS_DONE, 0),
+        "lead_created": stage_counts.get(PipelineStage.LEAD_CREATED, 0),
+        "filtered": stage_counts.get(PipelineStage.FILTERED, 0),
+        "failed": stage_counts.get(PipelineStage.FAILED, 0),
+    }
+    
+    completed = stages["lead_created"] + stages["filtered"] + stages["failed"]
+    
+    return {
+        "is_running": PIPELINE_ACTIVE.get(scan_id, False),
+        "total": total,
+        "completed": completed,
+        "progress_percent": round((completed / total * 100) if total > 0 else 0, 1),
+        "stages": stages,
+        "leads_created": stages["lead_created"],
+        "filtered_out": stages["filtered"],
+        "failed": stages["failed"]
+    }
+
+
+@router.get("/{scan_id}/queue/v2")
+async def get_scan_queue_v2(
+    scan_id: int,
+    limit: int = Query(100, description="Max items"),
+    offset: int = Query(0, description="Offset"),
+    stage: Optional[int] = Query(None, description="Filter by pipeline stage"),
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    📋 Get scan queue with pipeline stage info (v2)
+    
+    Returns items with proper pipeline_stage and all fields for display.
+    """
+    from app.models.scan_campaign import PipelineStage, PIPELINE_STAGE_LABELS
+    
+    query = select(ScanQueue).where(ScanQueue.campaign_id == scan_id)
+    
+    if stage is not None:
+        query = query.where(ScanQueue.pipeline_stage == stage)
+    
+    query = query.order_by(ScanQueue.pipeline_stage.desc(), ScanQueue.id.desc())
+    query = query.offset(offset).limit(limit)
+    
+    result = await session.execute(query)
+    items = result.scalars().all()
+    
+    return [
+        {
+            "id": item.id,
+            "domain": item.domain,
+            "url": item.url,
+            "title": item.title or item.meta_title,
+            
+            # Pipeline info
+            "pipeline_stage": item.pipeline_stage or 0,
+            "pipeline_stage_label": PIPELINE_STAGE_LABELS.get(
+                PipelineStage(item.pipeline_stage or 0), "ממתין"
+            ),
+            "retry_count": item.retry_count or 0,
+            
+            # Business type
+            "business_type": item.business_type,
+            "business_type_reason": item.business_type_reason,
+            
+            # WHOIS
+            "whois_name": item.owner_name,
+            "whois_org": item.owner_org,
+            "whois_email": item.owner_email,
+            "whois_phone": item.owner_phone,
+            "whois_private": bool(item.whois_is_private),
+            
+            # Contact info from page
+            "emails": item.emails_found or [],
+            "phones": item.phones_found or [],
+            
+            # Content
+            "has_content": bool(item.html_text),
+            "content_preview": (item.html_text or "")[:200],
+            
+            # Status
+            "is_blacklisted": bool(item.is_blacklisted),
+            "error_message": item.error_message,
+            
+            # Timestamps
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+            "stage_updated_at": item.stage_updated_at.isoformat() if item.stage_updated_at else None,
+        }
+        for item in items
+    ]
