@@ -18,23 +18,44 @@ jobs:
           host: 49.13.31.182
           username: root
           key: ${{ secrets.DEPLOY_KEY }}
+          script_stop: false
           script: |
             cd /opt/partnercalc-os
             
             echo "📥 Pulling latest code..."
             git pull origin main
             
-            echo "🔨 Building and starting containers..."
-            docker compose -f docker/docker-compose.prod.yml up -d --build --force-recreate
+            echo "🔨 Building images first (without stopping services)..."
+            docker compose -f docker/docker-compose.prod.yml build
             
-            echo "⏳ Waiting for services to start..."
-            sleep 10
+            echo "🔄 Rolling update - one service at a time..."
             
-            echo "🔄 Restarting nginx to refresh DNS..."
+            # Update backend first
+            docker compose -f docker/docker-compose.prod.yml up -d --no-deps backend
+            sleep 5
+            
+            # Update workers
+            docker compose -f docker/docker-compose.prod.yml up -d --no-deps celery-worker celery-beat
+            sleep 3
+            
+            # Update frontend
+            docker compose -f docker/docker-compose.prod.yml up -d --no-deps frontend
+            sleep 3
+            
+            # Refresh nginx DNS
             docker restart partnercalc-nginx
+            sleep 2
             
             echo "✅ Deploy completed!"
             docker ps --format 'table {{.Names}}\t{{.Status}}'
             
             echo "🔍 Health check..."
-            curl -s http://localhost/api/stats/active-scans > /dev/null && echo "✅ API is healthy!" || echo "❌ API check failed"
+            for i in 1 2 3 4 5; do
+              if curl -s http://localhost/api/stats/active-scans > /dev/null; then
+                echo "✅ API is healthy!"
+                exit 0
+              fi
+              echo "⏳ Waiting for API... attempt $i"
+              sleep 5
+            done
+            echo "⚠️ API may still be starting..."
