@@ -1072,10 +1072,20 @@ async def run_add_keywords_background(scan_id: int, keywords: list, max_results:
                     select(func.count(ScanQueue.id)).where(ScanQueue.campaign_id == scan_id)
                 )
                 campaign.total_urls = total_result.scalar_one()
-                campaign.status = "completed"
                 await session.commit()
             
             logger.info(f"✅ Background add-keywords complete: {new_urls_added} new, {duplicates_skipped} duplicates")
+            
+            # 🚀 Auto-start pipeline for new domains
+            if new_urls_added > 0:
+                logger.info(f"🚀 Starting pipeline for {new_urls_added} new domains...")
+                from app.services.pipeline_service import PipelineService
+                pipeline_result = await PipelineService().run_pipeline(scan_id)
+                logger.info(f"✅ Pipeline result: {pipeline_result}")
+            else:
+                if campaign:
+                    campaign.status = "completed"
+                    await session.commit()
             
         except Exception as e:
             logger.error(f"❌ Background add-keywords failed: {e}")
@@ -1196,10 +1206,21 @@ async def run_rescan_keywords_background(scan_id: int, keywords: list, max_resul
                     select(func.count(ScanQueue.id)).where(ScanQueue.campaign_id == scan_id)
                 )
                 campaign.total_urls = total_result.scalar_one()
-                campaign.status = "completed"
                 await session.commit()
             
             logger.info(f"✅ Background rescan complete: {new_urls_added} new, {duplicates_skipped} duplicates")
+            
+            # 🚀 Auto-start pipeline for new domains
+            if new_urls_added > 0:
+                logger.info(f"🚀 Starting pipeline for {new_urls_added} new domains...")
+                from app.services.pipeline_service import PipelineService
+                pipeline_result = await PipelineService().run_pipeline(scan_id)
+                logger.info(f"✅ Pipeline result: {pipeline_result}")
+            else:
+                # No new domains, mark as completed
+                if campaign:
+                    campaign.status = "completed"
+                    await session.commit()
             
         except Exception as e:
             logger.error(f"❌ Background rescan failed: {e}")

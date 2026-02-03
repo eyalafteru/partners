@@ -972,6 +972,27 @@ export default function ScansPage() {
     }
   }
 
+  // Start pipeline for pending domains
+  const startPipeline = async (scanId: number) => {
+    const pending = pipelineStats[scanId]?.stages?.pending || 0
+    if (!confirm(`להפעיל פייפליין על ${pending} דומיינים ממתינים?\n\nזה יבצע:\n• סריקת תוכן (ZenRows)\n• סיווג AI (GPT)\n• בדיקת WHOIS\n• יצירת לידים`)) return
+    
+    try {
+      const response = await fetch(`/api/scans/${scanId}/pipeline/start`, { method: 'POST' })
+      if (response.ok) {
+        const data = await response.json()
+        alert(`🚀 ${data.message}`)
+        fetchScans()
+      } else {
+        const error = await response.json()
+        alert(`שגיאה: ${error.detail || 'Failed to start pipeline'}`)
+      }
+    } catch (error) {
+      console.error('Pipeline start failed:', error)
+      alert('שגיאה בהפעלת הפייפליין')
+    }
+  }
+
   const viewResults = (scan: Scan) => {
     // Open modal immediately - non-blocking
     setSelectedScan(scan)
@@ -1089,6 +1110,16 @@ export default function ScansPage() {
                   >
                     {scan.status === 'running' ? '⏳' : '🔄'}
                   </button>
+                  {/* Start Pipeline Button */}
+                  {pipelineStats[scan.id]?.stages?.pending > 0 && scan.status !== 'running' && (
+                    <button
+                      onClick={() => startPipeline(scan.id)}
+                      className="p-1 text-green-500 hover:text-green-700 animate-pulse"
+                      title={`הפעל פייפליין על ${pipelineStats[scan.id]?.stages?.pending} דומיינים ממתינים`}
+                    >
+                      🚀
+                    </button>
+                  )}
                   <span className={`badge ${statusColors[scan.status]}`}>
                     {statusLabels[scan.status]}
                   </span>
