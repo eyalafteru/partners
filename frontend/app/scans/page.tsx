@@ -893,6 +893,25 @@ export default function ScansPage() {
     return () => clearInterval(interval)
   }, [autoRefresh, selectedScan])
 
+  // Rescan existing keywords (add only new domains)
+  const rescanExistingKeywords = async (scanId: number) => {
+    if (!confirm('לסרוק מחדש את אותן מילות מפתח? רק דומיינים חדשים יתווספו.')) return
+    
+    try {
+      const response = await fetch(`/api/scans/${scanId}/rescan-keywords`, { method: 'POST' })
+      if (response.ok) {
+        const data = await response.json()
+        alert(`✅ נוספו ${data.new_urls} דומיינים חדשים!\n${data.duplicates_skipped} כפילויות סוננו.`)
+        fetchScans()
+      } else {
+        alert('שגיאה בסריקה מחדש')
+      }
+    } catch (error) {
+      console.error('Rescan failed:', error)
+      alert('שגיאה בסריקה מחדש')
+    }
+  }
+
   const viewResults = (scan: Scan) => {
     // Open modal immediately - non-blocking
     setSelectedScan(scan)
@@ -987,7 +1006,7 @@ export default function ScansPage() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* Edit & Add Keywords buttons */}
+                  {/* Edit, Add Keywords & Rescan buttons */}
                   <button
                     onClick={() => setEditingScan(scan)}
                     className="text-gray-400 hover:text-blue-600 p-1"
@@ -1001,6 +1020,14 @@ export default function ScansPage() {
                     title="הוסף מילות חיפוש"
                   >
                     ➕
+                  </button>
+                  <button
+                    onClick={() => rescanExistingKeywords(scan.id)}
+                    disabled={scan.status === 'running'}
+                    className="text-gray-400 hover:text-orange-600 p-1 disabled:opacity-50"
+                    title="סרוק מחדש את אותן מילות מפתח (יוסיף רק דומיינים חדשים)"
+                  >
+                    🔄
                   </button>
                   <span className={`badge ${statusColors[scan.status]}`}>
                     {statusLabels[scan.status]}

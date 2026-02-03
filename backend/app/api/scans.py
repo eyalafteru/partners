@@ -1033,6 +1033,101 @@ async def add_keywords_to_scan(
     }
 
 
+@router.post("/{scan_id}/rescan-keywords")
+async def rescan_existing_keywords(
+    scan_id: int,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    סריקה מחדש של אותן מילות מפתח
+    מסנן כפילויות - רק דומיינים חדשים יתווספו
+    """
+    from urllib.parse import urlparse
+    
+    result = await session.execute(
+        select(ScanCampaign).where(ScanCampaign.id == scan_id)
+    )
+    campaign = result.scalar_one_or_none()
+    
+    if not campaign:
+        raise HTTPException(status_code=404, detail="סריקה לא נמצאה")
+    
+    if not campaign.keywords:
+        raise HTTPException(status_code=400, detail="אין מילות מפתח לסריקה")
+    
+    # Get existing domains in this campaign
+    existing_result = await session.execute(
+        select(ScanQueue.domain).where(ScanQueue.campaign_id == scan_id)
+    )
+    existing_domains = set(r[0] for r in existing_result.all() if r[0])
+    
+    logger.info(f"🔄 Rescanning {len(campaign.keywords)} keywords for campaign {scan_id}")
+    logger.info(f"📊 Campaign has {len(existing_domains)} existing domains")
+    
+    # Run Apify scan for all existing keywords
+    apify = get_apify_scraper()
+    new_urls_added = 0
+    duplicates_skipped = 0
+    
+    for keyword in campaign.keywords:
+        try:
+            urls = await apify.search_google(
+                keyword, 
+                max_results=campaign.results_per_query or 100
+            )
+            
+            for url_data in urls:
+                url = url_data.get("url", "")
+                try:
+                    parsed = urlparse(url)
+                    domain = parsed.netloc.replace("www.", "")
+                    
+                    # Skip if domain already exists
+                    if domain in existing_domains:
+                        duplicates_skipped += 1
+                        continue
+                    
+                    # Add new domain
+                    existing_domains.add(domain)
+                    
+                    queue_item = ScanQueue(
+                        campaign_id=scan_id,
+                        url=url,
+                        domain=domain,
+                        title=url_data.get("title", ""),
+                        description=url_data.get("description", ""),
+                        google_position=url_data.get("position", 0),
+                        status="pending"
+                    )
+                    session.add(queue_item)
+                    new_urls_added += 1
+                    
+                except Exception as e:
+                    logger.warning(f"Error parsing URL {url}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error scanning keyword '{keyword}': {e}")
+    
+    await session.commit()
+    
+    # Update campaign counts
+    total_result = await session.execute(
+        select(func.count(ScanQueue.id)).where(ScanQueue.campaign_id == scan_id)
+    )
+    campaign.total_urls = total_result.scalar_one()
+    await session.commit()
+    
+    logger.info(f"✅ Rescan complete: {new_urls_added} new, {duplicates_skipped} duplicates")
+    
+    return {
+        "message": f"נוספו {new_urls_added} דומיינים חדשים",
+        "new_urls": new_urls_added,
+        "duplicates_skipped": duplicates_skipped,
+        "total_urls": campaign.total_urls,
+        "keywords_scanned": len(campaign.keywords)
+    }
+
+
 @router.post("/{scan_id}/start")
 async def start_scan(
     scan_id: int,
