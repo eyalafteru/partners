@@ -207,6 +207,25 @@ export default function ScansPage() {
   // Content viewer modal
   const [viewingContent, setViewingContent] = useState<{domain: string, content: string} | null>(null)
   
+  // Pipeline stats for each scan
+  const [pipelineStats, setPipelineStats] = useState<Record<number, {
+    total: number
+    completed: number
+    progress_percent: number
+    stages: {
+      pending: number
+      scraped: number
+      classified: number
+      whois_done: number
+      lead_created: number
+      filtered: number
+      failed: number
+    }
+    leads_created: number
+    filtered_out: number
+    failed: number
+  }>>({})
+
   // All domains state with pagination
   const [allDomains, setAllDomains] = useState<DomainItem[]>([])
   const [loadingDomains, setLoadingDomains] = useState(false)
@@ -277,6 +296,7 @@ export default function ScansPage() {
   useEffect(() => {
     if (scans.length > 0) {
       fetchAllAIStats()
+      fetchAllPipelineStats(scans) // Also fetch pipeline stats
     }
   }, [scans])
 
@@ -396,6 +416,22 @@ export default function ScansPage() {
       }
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Fetch pipeline stats for all scans
+  const fetchAllPipelineStats = async (scanList?: Scan[]) => {
+    const scansToFetch = scanList || scans
+    for (const scan of scansToFetch) {
+      try {
+        const response = await fetch(`/api/scans/${scan.id}/pipeline/status`)
+        if (response.ok) {
+          const stats = await response.json()
+          setPipelineStats(prev => ({ ...prev, [scan.id]: stats }))
+        }
+      } catch (error) {
+        // Silently ignore errors
+      }
     }
   }
 
@@ -1154,6 +1190,54 @@ export default function ScansPage() {
                   <div className="text-xs text-gray-500">⚡ שויכו (GPT)</div>
                 </div>
               </div>
+
+              {/* Pipeline Stats - QC Row */}
+              {pipelineStats[scan.id] && (
+                <div className="grid grid-cols-7 gap-2 mb-4 pt-2 border-t border-gray-100 bg-gray-50 p-2 rounded-lg">
+                  <div className="text-center">
+                    <div className="text-sm font-semibold text-gray-500">
+                      {pipelineStats[scan.id].stages.pending}
+                    </div>
+                    <div className="text-xs text-gray-400">⏳ ממתין</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-sm font-semibold text-blue-600">
+                      {pipelineStats[scan.id].stages.scraped}
+                    </div>
+                    <div className="text-xs text-gray-400">📄 נסרק</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-sm font-semibold text-purple-600">
+                      {pipelineStats[scan.id].stages.classified}
+                    </div>
+                    <div className="text-xs text-gray-400">🤖 סווג</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-sm font-semibold text-cyan-600">
+                      {pipelineStats[scan.id].stages.whois_done}
+                    </div>
+                    <div className="text-xs text-gray-400">🔍 WHOIS</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-sm font-semibold text-green-600">
+                      {pipelineStats[scan.id].leads_created}
+                    </div>
+                    <div className="text-xs text-gray-400">✅ ליד</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-sm font-semibold text-yellow-600">
+                      {pipelineStats[scan.id].filtered_out}
+                    </div>
+                    <div className="text-xs text-gray-400">🚫 סונן</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-sm font-semibold text-red-600">
+                      {pipelineStats[scan.id].failed}
+                    </div>
+                    <div className="text-xs text-gray-400">❌ נכשל</div>
+                  </div>
+                </div>
+              )}
 
               {/* Actions */}
               <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
