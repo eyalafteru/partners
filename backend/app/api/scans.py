@@ -2280,6 +2280,7 @@ async def get_ai_stats(
             campaign.ai_current_domain not in [None, "", "הושלם ✅", "✅ הושלם!", "נעצר ⏹️"] 
             and not (campaign.ai_current_domain or "").startswith("סורק תוכן")
             and not (campaign.ai_current_domain or "").startswith("סריקת תוכן")
+            and not (campaign.ai_current_domain or "").startswith("סורק מחדש")
             and not (campaign.ai_current_domain or "").startswith("בתור")
             and not "הושלם" in (campaign.ai_current_domain or "")
         ) if campaign else False
