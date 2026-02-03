@@ -244,7 +244,8 @@ async def test_send_to_lead(
         }
     else:
         comm.status = "failed"
-        comm.metadata = {**comm.metadata, "error": result.get("error")}
+        existing_metadata = comm.metadata if isinstance(comm.metadata, dict) else {}
+        comm.metadata = {**existing_metadata, "error": result.get("error")}
         await session.commit()
         
         raise HTTPException(status_code=500, detail=f"שליחה נכשלה: {result.get('error')}")
