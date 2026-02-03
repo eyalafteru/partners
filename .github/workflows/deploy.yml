@@ -20,7 +20,21 @@ jobs:
           key: ${{ secrets.DEPLOY_KEY }}
           script: |
             cd /opt/partnercalc-os
+            
+            echo "📥 Pulling latest code..."
             git pull origin main
-            docker compose -f docker/docker-compose.prod.yml up -d --build
+            
+            echo "🔨 Building and starting containers..."
+            docker compose -f docker/docker-compose.prod.yml up -d --build --force-recreate
+            
+            echo "⏳ Waiting for services to start..."
+            sleep 10
+            
+            echo "🔄 Restarting nginx to refresh DNS..."
+            docker restart partnercalc-nginx
+            
             echo "✅ Deploy completed!"
             docker ps --format 'table {{.Names}}\t{{.Status}}'
+            
+            echo "🔍 Health check..."
+            curl -s http://localhost/api/stats/active-scans > /dev/null && echo "✅ API is healthy!" || echo "❌ API check failed"
