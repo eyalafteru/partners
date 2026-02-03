@@ -996,7 +996,7 @@ async def add_keywords_to_scan(
     
     for keyword in new_keywords:
         try:
-            urls = await apify.search_google(
+            urls = await apify.search(
                 keyword, 
                 max_results=campaign.results_per_query or 100
             )
@@ -1091,7 +1091,7 @@ async def rescan_existing_keywords(
     
     for keyword in campaign.keywords:
         try:
-            urls = await apify.search_google(
+            urls = await apify.search(
                 keyword, 
                 max_results=campaign.results_per_query or 100
             )
