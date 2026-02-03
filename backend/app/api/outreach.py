@@ -41,10 +41,13 @@ class OutreachSettings(BaseModel):
 async def get_settings(session: AsyncSession) -> dict:
     """קבלת הגדרות Outreach"""
     from sqlalchemy import text
-    result = await session.execute(text("SELECT key, value FROM outreach_settings"))
+    # Use backticks to escape reserved word 'key' for MariaDB
+    result = await session.execute(text("SELECT `key`, `value` FROM outreach_settings"))
     rows = result.fetchall()
     settings = {}
-    for key, value in rows:
+    for row in rows:
+        key = row[0]
+        value = row[1]
         if key in ['daily_limit', 'start_hour', 'end_hour', 'interval_minutes']:
             settings[key] = int(value)
         elif key == 'enabled':
@@ -501,10 +504,12 @@ async def update_outreach_settings(
         else:
             value = str(value)
         
+        # Use MariaDB/MySQL compatible syntax with escaped column names
         await session.execute(
             text("""
-                INSERT OR REPLACE INTO outreach_settings (key, value, updated_at) 
+                INSERT INTO outreach_settings (`key`, `value`, updated_at) 
                 VALUES (:key, :value, :updated_at)
+                ON DUPLICATE KEY UPDATE `value` = :value, updated_at = :updated_at
             """),
             {"key": key, "value": value, "updated_at": datetime.now()}
         )

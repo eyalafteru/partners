@@ -17,10 +17,13 @@ async def get_settings() -> dict:
     """קבלת הגדרות Outreach"""
     from sqlalchemy import text
     async with get_async_session_context() as session:
-        result = await session.execute(text("SELECT key, value FROM outreach_settings"))
+        # Use backticks to escape reserved word 'key' for MariaDB
+        result = await session.execute(text("SELECT `key`, `value` FROM outreach_settings"))
         rows = result.fetchall()
         settings = {}
-        for key, value in rows:
+        for row in rows:
+            key = row[0]
+            value = row[1]
             if key in ['daily_limit', 'start_hour', 'end_hour', 'interval_minutes']:
                 settings[key] = int(value)
             elif key == 'enabled':
