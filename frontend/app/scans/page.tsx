@@ -1140,8 +1140,8 @@ export default function ScansPage() {
                 )}
               </div>
 
-              {/* Progress - Live Status - hide when complete */}
-              {scan.status === 'running' && scan.scanned_count < scan.total_urls && (
+              {/* Progress - Live Pipeline Status */}
+              {(scan.status === 'running' || (pipelineStats[scan.id]?.is_running)) && (
                 <div className="mb-4 p-3 bg-green-50 rounded-lg border border-green-200">
                   <div className="flex items-center justify-between mb-2">
                     <span className="flex items-center gap-2 text-green-700 font-medium">
@@ -1149,20 +1149,23 @@ export default function ScansPage() {
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                         <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
                       </span>
-                      🔍 סריקה פעילה מ-Apify
+                      🚀 פייפליין פעיל
                     </span>
                     <span className="text-sm font-bold text-green-800">
-                      {scan.scanned_count} / {scan.total_urls} URLs
+                      {pipelineStats[scan.id]?.completed || 0} / {pipelineStats[scan.id]?.total || scan.total_urls} 
                     </span>
                   </div>
                   <div className="w-full h-3 bg-green-200 rounded-full overflow-hidden">
                     <div 
                       className="h-full bg-gradient-to-r from-green-500 to-green-600 rounded-full transition-all duration-500"
-                      style={{ width: `${scan.total_urls ? (scan.scanned_count / scan.total_urls) * 100 : 0}%` }}
+                      style={{ width: `${pipelineStats[scan.id]?.progress_percent || 0}%` }}
                     />
                   </div>
                   <div className="text-xs text-green-600 mt-2 text-center">
-                    {Math.round(scan.total_urls ? (scan.scanned_count / scan.total_urls) * 100 : 0)}% הושלם
+                    {pipelineStats[scan.id]?.progress_percent?.toFixed(1) || 0}% הושלם | 
+                    ✅ {pipelineStats[scan.id]?.leads_created || 0} לידים | 
+                    🚫 {pipelineStats[scan.id]?.filtered_out || 0} סוננו | 
+                    ❌ {pipelineStats[scan.id]?.failed || 0} נכשלו
                   </div>
                 </div>
               )}
