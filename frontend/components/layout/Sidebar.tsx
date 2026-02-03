@@ -26,7 +26,6 @@ const navigation = [
   { name: 'סריקות', href: '/scans', icon: Search },
   { divider: true, name: 'תקשורת' },
   { name: 'תבניות מייל', href: '/emails/templates', icon: FileText },
-  { name: 'הודעות', href: '/crm/inbox', icon: MessageSquare },
   { divider: true, name: 'ניהול' },
   { name: 'פרומפטים', href: '/admin/prompts', icon: Bot },
   { name: 'תרחישי תשובות', href: '/admin/scenarios', icon: Zap },
