@@ -956,63 +956,7 @@ export default function ScansPage() {
         </button>
       </div>
 
-      {/* GPU Control Bar */}
-      <div className="card p-3 flex items-center justify-between bg-gradient-to-r from-green-50 to-blue-50 border border-green-200">
-        <div className="flex items-center gap-3">
-          <span className="text-lg">🎮</span>
-          <span className="font-medium text-gray-700">GPU Control:</span>
-          {gpuStatus && gpuStatus.count > 0 ? (
-            <span className="text-green-600 font-medium flex items-center gap-1">
-              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-              מודל טעון ({gpuStatus.loaded_models.length})
-            </span>
-          ) : (
-            <span className="text-gray-500">מודל לא טעון</span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={loadModelToGPU}
-            disabled={loadingGPU || (gpuStatus?.count || 0) > 0}
-            className={`btn text-sm flex items-center gap-1 ${
-              (gpuStatus?.count || 0) > 0
-                ? 'bg-gray-300 cursor-not-allowed'
-                : 'bg-green-500 hover:bg-green-600 text-white'
-            }`}
-          >
-            {loadingGPU ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <>🔥 טען ל-GPU</>
-            )}
-          </button>
-          <button
-            onClick={unloadModelFromGPU}
-            disabled={loadingGPU || (gpuStatus?.count || 0) === 0}
-            className={`btn text-sm flex items-center gap-1 ${
-              (gpuStatus?.count || 0) === 0
-                ? 'bg-gray-300 cursor-not-allowed'
-                : 'bg-blue-500 hover:bg-blue-600 text-white'
-            }`}
-          >
-            {loadingGPU ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <>❄️ הורד מ-GPU</>
-            )}
-          </button>
-          
-          {/* Stop All AI Button */}
-          <div className="border-l pl-2 ml-2">
-            <button
-              onClick={() => stopAIAnalysis()}
-              className="btn text-sm flex items-center gap-1 bg-red-500 hover:bg-red-600 text-white"
-            >
-              🛑 עצור הכל AI
-            </button>
-          </div>
-        </div>
-      </div>
+      {/* GPU Control Bar - REMOVED - Using external APIs only */}
 
       {/* Global Activity Status */}
       {(scans.some(s => s.status === 'running' && s.scanned_count < s.total_urls) || 
@@ -1044,24 +988,7 @@ export default function ScansPage() {
               )}
             </div>
             
-            {/* Content + Navigation Rescan */}
-            <div className="bg-white rounded-lg p-3 border">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-purple-600">🎯</span>
-                <span className="font-medium text-sm">סריקה מלאה</span>
-              </div>
-              {scans.filter(s => s.rescan_status === 'running').length > 0 ? (
-                scans.filter(s => s.rescan_status === 'running').map(scan => (
-                  <div key={scan.id} className="text-xs flex items-center gap-2 py-1">
-                    <Loader2 className="w-3 h-3 animate-spin text-purple-500" />
-                    <span className="font-medium">{scan.name}</span>
-                    <span className="text-gray-500">({scan.rescan_processed}/{scan.rescan_total})</span>
-                  </div>
-                ))
-              ) : (
-                <div className="text-xs text-gray-400">אין סריקות פעילות</div>
-              )}
-            </div>
+            {/* Content + Navigation Rescan - REMOVED */}
             
             {/* AI Classification */}
             <div className="bg-white rounded-lg p-3 border">
@@ -1085,54 +1012,9 @@ export default function ScansPage() {
               )}
             </div>
             
-            {/* Deep Scan */}
-            <div className="bg-white rounded-lg p-3 border">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-teal-600">🔬</span>
-                <span className="font-medium text-sm">סריקה מעמיקה</span>
-              </div>
-              {(() => {
-                const runningScans = scans.filter(s => s.deep_scan_status === 'running')
-                console.log('🔬 Deep scan check:', { 
-                  total: scans.length, 
-                  running: runningScans.length,
-                  statuses: scans.map(s => ({ id: s.id, name: s.name, status: s.deep_scan_status }))
-                })
-                return runningScans.length > 0 ? (
-                  runningScans.map(scan => (
-                    <div key={scan.id} className="text-xs flex items-center gap-2 py-1">
-                      <Loader2 className="w-3 h-3 animate-spin text-teal-500" />
-                      <span className="font-medium">{scan.name}</span>
-                      <span className="text-gray-500">({scan.deep_scan_processed || 0}/{scan.deep_scan_total || 0})</span>
-                      {scan.deep_scan_current && (
-                        <span className="text-gray-400 truncate max-w-[150px]">{scan.deep_scan_current}</span>
-                      )}
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-xs text-gray-400">אין סריקות מעמיקות פעילות</div>
-                )
-              })()}
-            </div>
+            {/* Deep Scan - REMOVED */}
             
-            {/* Calculator Matching */}
-            <div className="bg-white rounded-lg p-3 border">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-indigo-600">🧮</span>
-                <span className="font-medium text-sm">התאמת מחשבונים</span>
-              </div>
-              {scans.filter(s => s.calc_match_status === 'running').length > 0 ? (
-                scans.filter(s => s.calc_match_status === 'running').map(scan => (
-                  <div key={scan.id} className="text-xs flex items-center gap-2 py-1">
-                    <Loader2 className="w-3 h-3 animate-spin text-indigo-500" />
-                    <span className="font-medium">{scan.name}</span>
-                    <span className="text-gray-500">({scan.calc_match_processed || 0}/{scan.calc_match_total || 0})</span>
-                  </div>
-                ))
-              ) : (
-                <div className="text-xs text-gray-400">אין התאמות פעילות</div>
-              )}
-            </div>
+            {/* Calculator Matching (Ollama) - REMOVED */}
 
             {/* GPT Calculator Matching */}
             <div className="bg-white rounded-lg p-3 border">
@@ -1406,91 +1288,7 @@ export default function ScansPage() {
                       </button>
                     )}
                     
-                    {/* Rescan sites without content */}
-                    {(scan.total_urls - (scan.has_content || 0)) > 0 && (
-                      <button 
-                        onClick={() => rescanNoContent(scan.id)}
-                        className="btn bg-orange-500 hover:bg-orange-600 text-white flex items-center gap-1"
-                        title="סרוק מחדש אתרים ללא תוכן"
-                      >
-                        🔄 סרוק שוב ({scan.total_urls - (scan.has_content || 0)})
-                      </button>
-                    )}
-
-                    {/* Rescan ALL - content + navigation + meta */}
-                    {scan.status === 'completed' && (
-                      <button 
-                        onClick={() => rescanForNavigation(scan.id)}
-                        disabled={scan.rescan_status === 'running'}
-                        className={`btn flex items-center gap-1 ${
-                          scan.rescan_status === 'running'
-                            ? 'bg-gray-400 cursor-not-allowed'
-                            : 'bg-purple-500 hover:bg-purple-600'
-                        } text-white`}
-                        title="סריקה מלאה: תוכן + תפריטים + מטא לכל האתרים"
-                      >
-                        {scan.rescan_status === 'running' ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            סורק ({scan.rescan_processed}/{scan.rescan_total})
-                          </>
-                        ) : (
-                          <>
-                            🎯 סרוק הכל ({scan.total_urls})
-                          </>
-                        )}
-                      </button>
-                    )}
-
-                    {/* Deep Scan button - only for completed scans with AI analyzed sites */}
-                    {scan.status === 'completed' && (scan.ai_analyzed || 0) > 0 && (
-                      <button 
-                        onClick={() => startDeepScan(scan.id)}
-                        disabled={scan.deep_scan_status === 'running'}
-                        className={`btn flex items-center gap-1 ${
-                          scan.deep_scan_status === 'running' 
-                            ? 'bg-gray-400 cursor-not-allowed' 
-                            : 'bg-teal-500 hover:bg-teal-600'
-                        } text-white`}
-                        title={scan.deep_scan_status === 'running' ? 'סריקה מעמיקה פעילה...' : 'סריקה מעמיקה של אתרים מתאימים'}
-                      >
-                        {scan.deep_scan_status === 'running' ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            סורק ({scan.deep_scan_processed}/{scan.deep_scan_total})
-                          </>
-                        ) : (
-                          <>
-                            🔬 סריקה מעמיקה
-                          </>
-                        )}
-                      </button>
-                    )}
-
-                    {/* Match Calculators button - show after AI classification (no deep scan needed!) */}
-                    {scan.status === 'completed' && (scan.ai_analyzed || 0) > 0 && (
-                      <button 
-                        onClick={() => startMatchCalculators(scan.id)}
-                        disabled={scan.calc_match_status === 'running'}
-                        className={`btn flex items-center gap-1 ${
-                          scan.calc_match_status === 'running'
-                            ? 'bg-gray-400 cursor-not-allowed'
-                            : 'bg-indigo-500 hover:bg-indigo-600'
-                        } text-white`}
-                        title={scan.calc_match_status === 'running' ? 'התאמת מחשבונים פעילה...' : 'התאם מחשבונים מדף הבית (מהיר!)'}
-                      >
-                        {scan.calc_match_status === 'running' ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            מתאים ({scan.calc_match_processed}/{scan.calc_match_total})
-                          </>
-                        ) : (
-                          <>
-                            🧮 התאם מחשבונים
-                          </>
-                        )}
-                      </button>
-                    )}
+                    {/* Old buttons removed - pipeline is now automatic */}
 
                     {/* GPT Match Calculators button */}
                     {scan.status === 'completed' && (scan.ai_analyzed || 0) > 0 && (
@@ -1517,16 +1315,7 @@ export default function ScansPage() {
                       </button>
                     )}
 
-                    {/* Convert to Leads button - only if calc matched */}
-                    {(scan.calc_matched || 0) > 0 && (
-                      <button 
-                        onClick={() => convertToLeads(scan.id)}
-                        className="btn bg-green-500 hover:bg-green-600 text-white flex items-center gap-1"
-                        title="המרה ללידים"
-                      >
-                        👥 צור לידים ({scan.calc_matched})
-                      </button>
-                    )}
+                    {/* Convert to Leads removed - now automatic in pipeline */}
                   </div>
                 )}
 
@@ -2196,8 +1985,7 @@ export default function ScansPage() {
                         <th className="text-right p-3 border-b font-medium text-gray-700 w-28">סוג עסק</th>
                         <th className="text-right p-3 border-b font-medium text-gray-700 w-44">WHOIS</th>
                         <th className="text-right p-3 border-b font-medium text-gray-700 w-20">תוכן</th>
-                        <th className="text-right p-3 border-b font-medium text-gray-700 w-32">סריקה מעמיקה</th>
-                        <th className="text-right p-3 border-b font-medium text-gray-700 min-w-[280px]">🧮 Ollama</th>
+                        {/* Deep Scan & Ollama columns - REMOVED */}
                         <th className="text-right p-3 border-b font-medium text-green-700 min-w-[280px] bg-green-50">⚡ GPT</th>
                         <th className="text-right p-3 border-b font-medium text-gray-700 min-w-[200px]">פרטי קשר</th>
                       </tr>
@@ -2352,112 +2140,7 @@ export default function ScansPage() {
                             )}
                           </td>
 
-                          {/* Deep Scan - Scanned Pages */}
-                          <td className="p-3">
-                            {result.deep_scan_status === 'completed' && result.scanned_pages && result.scanned_pages.length > 0 ? (
-                              <div className="text-xs space-y-1">
-                                <div className="flex items-center gap-1 mb-1">
-                                  <span className="text-teal-600">🔬</span>
-                                  <span className="font-medium text-gray-700">{result.scanned_pages.length} עמודים</span>
-                                </div>
-                                <div className="flex flex-wrap gap-1">
-                                  {result.scanned_pages.slice(0, 5).map((page, idx) => (
-                                    <span 
-                                      key={idx}
-                                      className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                                        page.page_type === 'home' ? 'bg-blue-100 text-blue-700' :
-                                        page.page_type === 'about' ? 'bg-purple-100 text-purple-700' :
-                                        page.page_type === 'services' ? 'bg-green-100 text-green-700' :
-                                        page.page_type === 'contact' ? 'bg-orange-100 text-orange-700' :
-                                        page.page_type === 'pricing' ? 'bg-yellow-100 text-yellow-700' :
-                                        'bg-gray-100 text-gray-600'
-                                      }`}
-                                      title={page.url}
-                                    >
-                                      {page.page_type === 'home' && '🏠'}
-                                      {page.page_type === 'about' && 'ℹ️'}
-                                      {page.page_type === 'services' && '⚙️'}
-                                      {page.page_type === 'contact' && '📞'}
-                                      {page.page_type === 'pricing' && '💰'}
-                                      {page.page_type === 'blog' && '📝'}
-                                      {!['home','about','services','contact','pricing','blog'].includes(page.page_type) && '📄'}
-                                      {page.has_contact_form && ' 📋'}
-                                    </span>
-                                  ))}
-                                  {result.scanned_pages.length > 5 && (
-                                    <span className="text-[10px] text-gray-400">+{result.scanned_pages.length - 5}</span>
-                                  )}
-                                </div>
-                              </div>
-                            ) : result.deep_scan_status === 'running' ? (
-                              <div className="flex items-center gap-1 text-xs text-teal-600">
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                                <span>סורק...</span>
-                              </div>
-                            ) : result.pages_scanned > 0 ? (
-                              <span className="text-xs text-gray-500">📄 {result.pages_scanned} עמודים</span>
-                            ) : (
-                              <span className="text-xs text-gray-300">—</span>
-                            )}
-                          </td>
-
-                          {/* Recommended Calculator */}
-                          <td className="p-3 min-w-[280px]">
-                            {result.all_recommended_calcs && result.all_recommended_calcs.length > 0 ? (
-                              <div className="text-xs space-y-2">
-                                {result.all_recommended_calcs.map((calc, idx) => (
-                                  <div key={idx} className={`${idx > 0 ? 'pt-2 border-t border-gray-200' : ''}`}>
-                                    <div className="flex items-center gap-2">
-                                      <span className={idx === 0 ? 'text-green-600' : 'text-gray-400'}>{idx === 0 ? '🧮' : '📊'}</span>
-                                      <span className={`font-medium ${idx === 0 ? 'text-gray-700' : 'text-gray-500'}`}>
-                                        {calc.calc_name || `מחשבון #${calc.calc_id}`}
-                                      </span>
-                                      <span className={`px-1.5 py-0.5 rounded text-white text-[10px] ${
-                                        calc.score >= 0.7 ? 'bg-green-500' :
-                                        calc.score >= 0.4 ? 'bg-yellow-500' : 'bg-red-500'
-                                      }`}>
-                                        {Math.round(calc.score * 100)}%
-                                      </span>
-                                    </div>
-                                    {calc.reason && (
-                                      <div className="text-gray-500 mt-1 pr-6 leading-relaxed">
-                                        {calc.reason}
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            ) : result.recommended_calc_id ? (
-                              <div className="text-xs space-y-1">
-                                <div className="flex items-center gap-1">
-                                  <span className="text-green-600">🧮</span>
-                                  <span className="font-medium text-gray-700 truncate max-w-[120px]" title={result.recommended_calc_name || ''}>
-                                    {result.recommended_calc_name || `מחשבון #${result.recommended_calc_id}`}
-                                  </span>
-                                </div>
-                                {result.recommended_calc_score !== null && (
-                                  <div className="flex items-center gap-1">
-                                    <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                                      <div 
-                                        className={`h-full rounded-full ${
-                                          result.recommended_calc_score >= 0.7 ? 'bg-green-500' :
-                                          result.recommended_calc_score >= 0.4 ? 'bg-yellow-500' : 'bg-red-500'
-                                        }`}
-                                        style={{ width: `${result.recommended_calc_score * 100}%` }}
-                                      />
-                                    </div>
-                                    <span className="text-gray-500">{Math.round(result.recommended_calc_score * 100)}%</span>
-                                  </div>
-                                )}
-                              </div>
-                            ) : result.deep_scan_status === 'completed' ? (
-                              <span className="text-xs text-yellow-600">ממתין להתאמה</span>
-                            ) : result.pages_scanned > 0 ? (
-                              <span className="text-xs text-blue-600">📄 {result.pages_scanned} עמודים</span>
-                            ) : (
-                              <span className="text-xs text-gray-300">—</span>
-                            )}
-                          </td>
+                          {/* Deep Scan & Ollama columns - REMOVED */}
 
                           {/* GPT Recommended Calculator */}
                           <td className="p-3 min-w-[280px] bg-green-50/30">
