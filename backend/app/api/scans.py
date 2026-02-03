@@ -3262,17 +3262,19 @@ async def start_match_calculators_gpt(
     if GPT_MATCH_STATUS.get(scan_id, {}).get("is_running"):
         return {"message": "התאמת GPT כבר רצה", "status": GPT_MATCH_STATUS[scan_id]}
     
-    # Get ALL items with content that haven't been GPT-matched yet
+    # Get only LEADS that haven't been GPT-matched yet
     from sqlalchemy import or_, func
+    from app.models.scan_campaign import PipelineStage
     result = await session.execute(
         select(ScanQueue)
         .where(ScanQueue.campaign_id == scan_id)
+        .where(ScanQueue.pipeline_stage == PipelineStage.LEAD_CREATED)  # Only leads!
         .where(ScanQueue.html_text != None)
         .where(func.length(ScanQueue.html_text) > 100)
         .where(ScanQueue.gpt_recommended_calc_id == None)
     )
     items = result.scalars().all()
-    logger.info(f"⚡ Found {len(items)} items for GPT matching")
+    logger.info(f"⚡ Found {len(items)} LEADS for GPT calculator matching")
     
     # Get all calculators
     calc_result = await session.execute(select(Calculator).where(Calculator.is_active == True))

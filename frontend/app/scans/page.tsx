@@ -91,18 +91,7 @@ interface ScanResult {
     title: string
     has_contact_form: boolean
   }>
-  // Calculator Match (Ollama)
-  recommended_calc_id: number | null
-  recommended_calc_name: string | null
-  recommended_calc_score: number | null
-  recommended_calc_reason: string | null
-  all_recommended_calcs: Array<{
-    calc_id: number
-    calc_name: string
-    score: number
-    reason: string
-  }> | null
-  // GPT Calculator Match
+  // GPT Calculator Match (runs only on leads)
   gpt_recommended_calc_id: number | null
   gpt_recommended_calc_name: string | null
   gpt_recommended_calc_score: number | null
@@ -816,20 +805,6 @@ export default function ScansPage() {
       }
     } catch (error) {
       console.error('Failed to start deep scan:', error)
-    }
-  }
-
-  // Match Calculators - AI matches best calculator for each site
-  const startMatchCalculators = async (scanId: number) => {
-    try {
-      const response = await fetch(`/api/scans/${scanId}/match-calculators`, { method: 'POST' })
-      if (response.ok) {
-        const data = await response.json()
-        console.log('🧮 Calculator matching started:', data)
-        fetchScans()
-      }
-    } catch (error) {
-      console.error('Failed to start calculator matching:', error)
     }
   }
 
