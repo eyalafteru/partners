@@ -15,7 +15,8 @@ import {
   BarChart2,
   Mail,
   FileText,
-  Zap
+  Zap,
+  Bell
 } from 'lucide-react'
 
 const navigation = [
@@ -30,6 +31,7 @@ const navigation = [
   { name: 'פרומפטים', href: '/admin/prompts', icon: Bot },
   { name: 'תרחישי תשובות', href: '/admin/scenarios', icon: Zap },
   { name: 'מענה אוטומטי', href: '/settings/auto-reply', icon: Settings },
+  { name: 'התראות WhatsApp', href: '/admin/notifications', icon: Bell },
   { name: 'API Keys', href: '/admin/api-keys', icon: Key },
   { name: 'Database', href: '/admin/database', icon: Database },
 ]

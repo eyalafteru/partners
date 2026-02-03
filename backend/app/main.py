@@ -18,7 +18,7 @@ from app.config import settings
 from app.database import init_db, close_db
 
 # Import API routers
-from app.api import calculators, leads, scans, communication, prompts, stats, webhooks, templates, ai_reply, emails, tracking, outreach, blacklist
+from app.api import calculators, leads, scans, communication, prompts, stats, webhooks, templates, ai_reply, emails, tracking, outreach, blacklist, notifications
 from app.api.admin import database as admin_database, api_keys, auto_reply as admin_auto_reply, scenarios as admin_scenarios, business_classifier as admin_classifier
 
 
@@ -229,6 +229,12 @@ app.include_router(
     blacklist.router,
     prefix="/api/blacklist",
     tags=["Blacklist"]
+)
+
+# Notifications - התראות WhatsApp
+app.include_router(
+    notifications.router,
+    tags=["Notifications"]
 )
 
 
