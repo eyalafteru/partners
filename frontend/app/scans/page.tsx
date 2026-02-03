@@ -953,9 +953,14 @@ export default function ScansPage() {
     return () => clearInterval(interval)
   }, [selectedScan])
 
+  // Rescan state
+  const [rescanningScan, setRescanningScan] = useState<number | null>(null)
+
   // Rescan existing keywords (add only new domains)
   const rescanExistingKeywords = async (scanId: number) => {
-    if (!confirm('לסרוק מחדש את אותן מילות מפתח? רק דומיינים חדשים יתווספו.')) return
+    if (!confirm('לסרוק מחדש את אותן מילות מפתח? רק דומיינים חדשים יתווספו.\n\n⏳ זה יכול לקחת 2-3 דקות...')) return
+    
+    setRescanningScan(scanId)
     
     try {
       const response = await fetch(`/api/scans/${scanId}/rescan-keywords`, { method: 'POST' })
@@ -969,6 +974,8 @@ export default function ScansPage() {
     } catch (error) {
       console.error('Rescan failed:', error)
       alert('שגיאה בסריקה מחדש')
+    } finally {
+      setRescanningScan(null)
     }
   }
 
@@ -1083,11 +1090,11 @@ export default function ScansPage() {
                   </button>
                   <button
                     onClick={() => rescanExistingKeywords(scan.id)}
-                    disabled={scan.status === 'running'}
-                    className="text-gray-400 hover:text-orange-600 p-1 disabled:opacity-50"
-                    title="סרוק מחדש את אותן מילות מפתח (יוסיף רק דומיינים חדשים)"
+                    disabled={scan.status === 'running' || rescanningScan === scan.id}
+                    className={`p-1 disabled:opacity-50 ${rescanningScan === scan.id ? 'text-orange-500 animate-spin' : 'text-gray-400 hover:text-orange-600'}`}
+                    title={rescanningScan === scan.id ? 'סורק... זה יכול לקחת 2-3 דקות' : 'סרוק מחדש את אותן מילות מפתח (יוסיף רק דומיינים חדשים)'}
                   >
-                    🔄
+                    {rescanningScan === scan.id ? '⏳' : '🔄'}
                   </button>
                   <span className={`badge ${statusColors[scan.status]}`}>
                     {statusLabels[scan.status]}
