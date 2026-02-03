@@ -1,0 +1,26 @@
+# 🚀 Auto Deploy to Production Server
+# כל push ל-main = deploy אוטומטי לשרת
+
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 🔗 Deploy to Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 49.13.31.182
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/partnercalc-os
+            git pull origin main
+            docker compose -f docker/docker-compose.prod.yml up -d --build
+            echo "✅ Deploy completed!"
+            docker ps --format 'table {{.Names}}\t{{.Status}}'
