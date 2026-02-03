@@ -3901,6 +3901,42 @@ async def stop_pipeline(scan_id: int):
     return {"status": "stopping", "message": "Stop signal sent"}
 
 
+@router.post("/{scan_id}/pipeline/retry-failed")
+async def retry_failed_items(
+    scan_id: int,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    🔄 Reset failed items to pending so they can be retried
+    """
+    from app.models.scan_campaign import PipelineStage
+    
+    # Reset failed items
+    result = await session.execute(
+        select(ScanQueue)
+        .where(ScanQueue.campaign_id == scan_id)
+        .where(ScanQueue.pipeline_stage == PipelineStage.FAILED)
+    )
+    failed_items = result.scalars().all()
+    
+    count = 0
+    for item in failed_items:
+        item.pipeline_stage = PipelineStage.PENDING
+        item.retry_count = 0
+        item.error_message = None
+        count += 1
+    
+    await session.commit()
+    
+    logger.info(f"🔄 Reset {count} failed items to pending for scan {scan_id}")
+    
+    return {
+        "status": "reset",
+        "message": f"אופסו {count} דומיינים שנכשלו",
+        "reset_count": count
+    }
+
+
 @router.get("/{scan_id}/pipeline/status")
 async def get_pipeline_status(
     scan_id: int,
