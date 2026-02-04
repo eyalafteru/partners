@@ -104,7 +104,6 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
-    redirect_slashes=False,  # מונע redirect שגורם לבעיית Mixed Content ב-HTTPS
 )
 
 # CORS - אפשר גישה מה-Frontend

@@ -65,7 +65,7 @@ export default function CalculatorsPage() {
 
   const fetchCalculators = async () => {
     try {
-      const response = await fetch('/api/calculators')
+      const response = await fetch('/api/calculators/')
       if (response.ok) {
         const data = await response.json()
         setCalculators(data)
@@ -531,7 +531,7 @@ function CalculatorModal({
     try {
       const apiUrl = calculator 
         ? `/api/calculators/${calculator.id}` 
-        : '/api/calculators'
+        : '/api/calculators/'
       const method = calculator ? 'PUT' : 'POST'
 
       const response = await fetch(apiUrl, {
