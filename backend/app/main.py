@@ -18,7 +18,7 @@ from app.config import settings
 from app.database import init_db, close_db
 
 # Import API routers
-from app.api import calculators, leads, scans, communication, prompts, stats, webhooks, templates, ai_reply, emails, tracking, outreach, blacklist, notifications, facebook_marketing
+from app.api import calculators, leads, scans, communication, prompts, stats, webhooks, templates, ai_reply, emails, tracking, outreach, blacklist, notifications, facebook_marketing, post_strategies
 from app.api.admin import database as admin_database, api_keys, auto_reply as admin_auto_reply, scenarios as admin_scenarios, business_classifier as admin_classifier
 
 
@@ -104,6 +104,7 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
+    redirect_slashes=False,  # מונע redirect שגורם לבעיית Mixed Content ב-HTTPS
 )
 
 # CORS - אפשר גישה מה-Frontend
@@ -260,6 +261,13 @@ app.include_router(
     facebook_marketing.router,
     prefix="/api/facebook",
     tags=["Facebook Marketing"]
+)
+
+# Post Strategies - אסטרטגיות כתיבה
+app.include_router(
+    post_strategies.router,
+    prefix="/api/strategies",
+    tags=["Post Strategies"]
 )
 
 

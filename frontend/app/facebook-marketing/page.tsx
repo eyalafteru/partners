@@ -17,6 +17,25 @@ interface Group {
   created_at: string;
 }
 
+// Calculator for campaign linking
+interface Calculator {
+  id: number;
+  name: string;
+  category: string | null;
+  url: string;
+  has_summary: boolean;
+}
+
+// Post Strategy for content generation
+interface PostStrategy {
+  id: number;
+  name: string;
+  slug: string;
+  icon: string;
+  description: string | null;
+  is_active: boolean;
+}
+
 interface Campaign {
   id: number;
   name: string;
@@ -30,6 +49,17 @@ interface Campaign {
   total_posts_published: number;
   total_replies: number;
   created_at: string;
+  // New fields for calculator & strategy support
+  calculator_id: number | null;
+  calculator_mode: 'specific' | 'all' | 'category';
+  calculator_category: string | null;
+  strategy_ids: number[];
+  link_placement: 'in_post' | 'first_comment' | 'none';
+  auto_responder_enabled: boolean;
+  auto_responder_type: 'comment' | 'messenger' | 'ai_decide';
+  auto_responder_template: string | null;
+  auto_responder_delay_minutes: number;
+  auto_responder_daily_limit: number;
 }
 
 interface Post {
@@ -44,6 +74,12 @@ interface Post {
   replies_count: number;
   published_at: string | null;
   created_at: string;
+  // New fields
+  calculator_id: number | null;
+  strategy_id: number | null;
+  first_comment_content: string | null;
+  first_comment_posted: boolean;
+  auto_replies_sent: number;
 }
 
 interface Reply {
@@ -387,19 +423,38 @@ const CampaignsTab: React.FC<{
   campaigns: Campaign[];
   groups: Group[];
   onCreate: (data: any) => void;
-  onGenerate: (id: number) => void;
+  onGenerate: (id: number) => Promise<void>;
   onUpdate: (id: number, data: any) => void;
 }> = ({ campaigns, groups, onCreate, onGenerate, onUpdate }) => {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [expandedCampaign, setExpandedCampaign] = useState<number | null>(null);
   const [groupSearch, setGroupSearch] = useState('');
+  const [generatingCampaignId, setGeneratingCampaignId] = useState<number | null>(null);
+  
+  // Calculators and strategies state
+  const [calculators, setCalculators] = useState<Calculator[]>([]);
+  const [strategies, setStrategies] = useState<PostStrategy[]>([]);
+  const [calcCategories, setCalcCategories] = useState<string[]>([]);
+  
+  // Extended form data with new fields
   const [formData, setFormData] = useState({
     name: '',
     topic: 'מחשבונים פיננסיים להטמעה בחינם',
     target_audience: '',
     target_group_ids: [] as number[],
     image_percentage: 50,
+    // New fields
+    calculator_id: null as number | null,
+    calculator_mode: 'all' as 'specific' | 'all' | 'category',
+    calculator_category: null as string | null,
+    strategy_ids: [] as number[],
+    link_placement: 'in_post' as 'in_post' | 'first_comment' | 'none',
+    auto_responder_enabled: false,
+    auto_responder_type: 'comment' as 'comment' | 'messenger' | 'ai_decide',
+    auto_responder_template: '',
+    auto_responder_delay_minutes: 5,
+    auto_responder_daily_limit: 50,
   });
   const [editFormData, setEditFormData] = useState({
     name: '',
@@ -407,8 +462,42 @@ const CampaignsTab: React.FC<{
     target_audience: '',
     image_percentage: 50,
     target_group_ids: [] as number[],
+    // New fields
+    calculator_id: null as number | null,
+    calculator_mode: 'all' as 'specific' | 'all' | 'category',
+    calculator_category: null as string | null,
+    strategy_ids: [] as number[],
+    link_placement: 'in_post' as 'in_post' | 'first_comment' | 'none',
+    auto_responder_enabled: false,
+    auto_responder_type: 'comment' as 'comment' | 'messenger' | 'ai_decide',
+    auto_responder_template: '',
+    auto_responder_delay_minutes: 5,
+    auto_responder_daily_limit: 50,
   });
   const [editGroupSearch, setEditGroupSearch] = useState('');
+  
+  // Fetch calculators and strategies on mount
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [calcRes, stratRes, catRes] = await Promise.all([
+          fetch(`${API_BASE}/calculators`),
+          fetch(`${API_BASE.replace('/facebook', '/strategies')}`),
+          fetch(`${API_BASE}/calculator-categories`),
+        ]);
+        
+        if (calcRes.ok) setCalculators(await calcRes.json());
+        if (stratRes.ok) setStrategies(await stratRes.json());
+        if (catRes.ok) {
+          const data = await catRes.json();
+          setCalcCategories(data.categories || []);
+        }
+      } catch (error) {
+        console.error('Error fetching data:', error);
+      }
+    };
+    fetchData();
+  }, []);
 
   // Filter groups by search
   const filteredGroups = groups.filter(g => 
@@ -430,6 +519,16 @@ const CampaignsTab: React.FC<{
       target_audience: campaign.target_audience || '',
       image_percentage: campaign.image_percentage,
       target_group_ids: campaign.target_group_ids || [],
+      calculator_id: campaign.calculator_id,
+      calculator_mode: campaign.calculator_mode || 'all',
+      calculator_category: campaign.calculator_category,
+      strategy_ids: campaign.strategy_ids || [],
+      link_placement: campaign.link_placement || 'in_post',
+      auto_responder_enabled: campaign.auto_responder_enabled || false,
+      auto_responder_type: campaign.auto_responder_type || 'comment',
+      auto_responder_template: campaign.auto_responder_template || '',
+      auto_responder_delay_minutes: campaign.auto_responder_delay_minutes || 5,
+      auto_responder_daily_limit: campaign.auto_responder_daily_limit || 50,
     });
     setEditGroupSearch('');
   };
@@ -445,7 +544,23 @@ const CampaignsTab: React.FC<{
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onCreate(formData);
-    setFormData({ name: '', topic: 'מחשבונים פיננסיים להטמעה בחינם', target_audience: '', target_group_ids: [], image_percentage: 50 });
+    setFormData({ 
+      name: '', 
+      topic: 'מחשבונים פיננסיים להטמעה בחינם', 
+      target_audience: '', 
+      target_group_ids: [], 
+      image_percentage: 50,
+      calculator_id: null,
+      calculator_mode: 'all',
+      calculator_category: null,
+      strategy_ids: [],
+      link_placement: 'in_post',
+      auto_responder_enabled: false,
+      auto_responder_type: 'comment',
+      auto_responder_template: '',
+      auto_responder_delay_minutes: 5,
+      auto_responder_daily_limit: 50,
+    });
     setShowCreateForm(false);
   };
 
@@ -508,6 +623,172 @@ const CampaignsTab: React.FC<{
               />
             </div>
           </div>
+          
+          {/* Calculator Selection */}
+          <div className="border-t pt-4">
+            <h4 className="font-bold text-md mb-3">🧮 בחירת מחשבון</h4>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">מצב בחירה</label>
+                <select
+                  value={formData.calculator_mode}
+                  onChange={(e) => setFormData({ ...formData, calculator_mode: e.target.value as any })}
+                  className="w-full border rounded px-3 py-2"
+                >
+                  <option value="all">כל המחשבונים (רוטציה)</option>
+                  <option value="specific">מחשבון ספציפי</option>
+                  <option value="category">קטגוריה</option>
+                </select>
+              </div>
+              {formData.calculator_mode === 'specific' && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">בחר מחשבון</label>
+                  <select
+                    value={formData.calculator_id || ''}
+                    onChange={(e) => setFormData({ ...formData, calculator_id: e.target.value ? parseInt(e.target.value) : null })}
+                    className="w-full border rounded px-3 py-2"
+                  >
+                    <option value="">בחר...</option>
+                    {calculators.map((calc) => (
+                      <option key={calc.id} value={calc.id}>{calc.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {formData.calculator_mode === 'category' && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">בחר קטגוריה</label>
+                  <select
+                    value={formData.calculator_category || ''}
+                    onChange={(e) => setFormData({ ...formData, calculator_category: e.target.value || null })}
+                    className="w-full border rounded px-3 py-2"
+                  >
+                    <option value="">בחר...</option>
+                    {calcCategories.map((cat) => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="block text-sm font-medium mb-1">מיקום הקישור</label>
+                <select
+                  value={formData.link_placement}
+                  onChange={(e) => setFormData({ ...formData, link_placement: e.target.value as any })}
+                  className="w-full border rounded px-3 py-2"
+                >
+                  <option value="in_post">בתוך הפוסט</option>
+                  <option value="first_comment">בתגובה ראשונה</option>
+                  <option value="none">ללא קישור</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          
+          {/* Strategy Selection */}
+          <div className="border-t pt-4">
+            <h4 className="font-bold text-md mb-3">📝 אסטרטגיות כתיבה ({formData.strategy_ids.length} נבחרו)</h4>
+            <div className="flex gap-2 mb-2">
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, strategy_ids: strategies.map(s => s.id) })}
+                className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+              >
+                בחר הכל
+              </button>
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, strategy_ids: [] })}
+                className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+              >
+                נקה הכל
+              </button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {strategies.map((strategy) => (
+                <label key={strategy.id} className="flex items-center gap-2 p-2 border rounded hover:bg-gray-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.strategy_ids.includes(strategy.id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setFormData({ ...formData, strategy_ids: [...formData.strategy_ids, strategy.id] });
+                      } else {
+                        setFormData({ ...formData, strategy_ids: formData.strategy_ids.filter((id) => id !== strategy.id) });
+                      }
+                    }}
+                  />
+                  <span className="text-lg">{strategy.icon}</span>
+                  <span className="text-sm">{strategy.name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          
+          {/* Auto-Responder Settings */}
+          <div className="border-t pt-4">
+            <div className="flex items-center gap-3 mb-3">
+              <h4 className="font-bold text-md">🤖 Auto-Responder</h4>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formData.auto_responder_enabled}
+                  onChange={(e) => setFormData({ ...formData, auto_responder_enabled: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              </label>
+            </div>
+            {formData.auto_responder_enabled && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">סוג תגובה</label>
+                  <select
+                    value={formData.auto_responder_type}
+                    onChange={(e) => setFormData({ ...formData, auto_responder_type: e.target.value as any })}
+                    className="w-full border rounded px-3 py-2"
+                  >
+                    <option value="comment">תגובה</option>
+                    <option value="messenger">מסנג'ר</option>
+                    <option value="ai_decide">AI מחליט</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">עיכוב (דקות)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="60"
+                    value={formData.auto_responder_delay_minutes}
+                    onChange={(e) => setFormData({ ...formData, auto_responder_delay_minutes: parseInt(e.target.value) })}
+                    className="w-full border rounded px-3 py-2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">מגבלה יומית</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="200"
+                    value={formData.auto_responder_daily_limit}
+                    onChange={(e) => setFormData({ ...formData, auto_responder_daily_limit: parseInt(e.target.value) })}
+                    className="w-full border rounded px-3 py-2"
+                  />
+                </div>
+                <div className="col-span-2 md:col-span-4">
+                  <label className="block text-sm font-medium mb-1">תבנית תשובה (אופציונלי)</label>
+                  <textarea
+                    value={formData.auto_responder_template}
+                    onChange={(e) => setFormData({ ...formData, auto_responder_template: e.target.value })}
+                    className="w-full border rounded px-3 py-2"
+                    rows={2}
+                    placeholder="היי {user_name}, תודה על ההתעניינות! 💬"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+          
           <div>
             <label className="block text-sm font-medium mb-1">קבוצות יעד ({formData.target_group_ids.length} נבחרו)</label>
             <input
@@ -694,6 +975,9 @@ const CampaignsTab: React.FC<{
                   <div className="flex items-center gap-2">
                     <span className="text-gray-400">{expandedCampaign === campaign.id ? '▼' : '▶'}</span>
                     <h3 className="font-bold text-lg">{campaign.name}</h3>
+                    <span className="text-xs text-gray-400">
+                      📅 {new Date(campaign.created_at).toLocaleDateString('he-IL')}
+                    </span>
                   </div>
                   <p className="text-gray-600 mr-6">{campaign.topic}</p>
                   <div className="flex gap-4 mt-2 text-sm text-gray-500 mr-6">
@@ -711,14 +995,25 @@ const CampaignsTab: React.FC<{
                   >
                     ✏️ ערוך
                   </button>
-                  {campaign.status === 'draft' && (
-                    <button
-                      onClick={() => onGenerate(campaign.id)}
-                      className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
-                    >
-                      ⚡ צור פוסטים
-                    </button>
-                  )}
+                  <button
+                    onClick={async () => {
+                      setGeneratingCampaignId(campaign.id);
+                      await onGenerate(campaign.id);
+                      setGeneratingCampaignId(null);
+                    }}
+                    disabled={generatingCampaignId === campaign.id}
+                    className={`px-3 py-1 text-white text-sm rounded ${
+                      generatingCampaignId === campaign.id 
+                        ? 'bg-gray-400 cursor-wait' 
+                        : 'bg-green-600 hover:bg-green-700'
+                    }`}
+                  >
+                    {generatingCampaignId === campaign.id ? (
+                      <>⏳ מייצר פוסטים...</>
+                    ) : (
+                      <>⚡ {campaign.status === 'draft' ? 'צור פוסטים' : 'צור פוסטים נוספים'}</>
+                    )}
+                  </button>
                 </div>
               </div>
             </div>
@@ -787,11 +1082,11 @@ const PostsTab: React.FC<{
   campaigns: Campaign[];
   onApprove: (id: number) => void;
   onReject: (id: number) => Promise<{ group_id: number; campaign_id: number | null } | null>;
-  onPublish: (id: number) => void;
+  onPublish: (id: number) => Promise<void>;
   onUpdate: (id: number, content: string) => void;
-  onRegenerate: (id: number, model?: string) => void;
-  onAddImage: (id: number, style: 'eyal' | 'generic', regenerate: boolean) => void;
-  onRegenerateForGroup: (campaignId: number, groupId: number) => void;
+  onRegenerate: (id: number, model?: string) => Promise<void>;
+  onAddImage: (id: number, style: 'eyal' | 'generic', regenerate: boolean) => Promise<void>;
+  onRegenerateForGroup: (campaignId: number, groupId: number) => Promise<void>;
   availableModels: { id: string; name: string }[];
 }> = ({ posts, groups, campaigns, onApprove, onReject, onPublish, onUpdate, onRegenerate, onAddImage, onRegenerateForGroup, availableModels }) => {
   const [filter, setFilter] = useState<string>('all');
@@ -801,6 +1096,11 @@ const PostsTab: React.FC<{
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [addingImageId, setAddingImageId] = useState<number | null>(null);
   const [deletedPost, setDeletedPost] = useState<{ groupId: number; campaignId: number; groupName: string; campaignName: string } | null>(null);
+  // Loading states for AI operations
+  const [loadingRegenerate, setLoadingRegenerate] = useState<number | null>(null);
+  const [loadingImage, setLoadingImage] = useState<number | null>(null);
+  const [loadingPublish, setLoadingPublish] = useState<number | null>(null);
+  const [loadingNewPost, setLoadingNewPost] = useState(false);
 
   const filteredPosts = posts.filter((p) => filter === 'all' || p.status === filter);
   const groupsMap = Object.fromEntries(groups.map((g) => [g.id, g.name]));
@@ -837,6 +1137,34 @@ const PostsTab: React.FC<{
                 )}
                 <span className="text-sm text-gray-500">👥 {groupsMap[post.group_id] || 'קבוצה לא ידועה'}</span>
                 {post.has_image && <span className="text-sm">🖼️</span>}
+                {/* New: Calculator info */}
+                {post.calculator_id && (
+                  <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
+                    🧮 מחשבון
+                  </span>
+                )}
+                {/* New: Strategy info */}
+                {post.strategy_id && (
+                  <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded">
+                    📝 אסטרטגיה
+                  </span>
+                )}
+                {/* New: First comment indicator */}
+                {post.first_comment_content && (
+                  <span className={`text-xs px-2 py-0.5 rounded ${
+                    post.first_comment_posted 
+                      ? 'bg-green-100 text-green-700' 
+                      : 'bg-yellow-100 text-yellow-700'
+                  }`}>
+                    💬 {post.first_comment_posted ? 'תגובה ראשונה נשלחה' : 'תגובה ראשונה ממתינה'}
+                  </span>
+                )}
+                {/* New: Auto-replies count */}
+                {post.auto_replies_sent > 0 && (
+                  <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+                    🤖 {post.auto_replies_sent} תשובות
+                  </span>
+                )}
               </div>
               <div className="flex gap-2 flex-wrap">
                 {post.status === 'pending_approval' && (
@@ -888,10 +1216,29 @@ const PostsTab: React.FC<{
                 )}
                 {post.status === 'approved' && (
                   <button
-                    onClick={() => onPublish(post.id)}
-                    className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                    onClick={async () => {
+                      setLoadingPublish(post.id);
+                      await onPublish(post.id);
+                      setLoadingPublish(null);
+                    }}
+                    disabled={loadingPublish === post.id}
+                    className={`px-3 py-1 text-white text-sm rounded ${
+                      loadingPublish === post.id 
+                        ? 'bg-gray-400 cursor-wait' 
+                        : 'bg-blue-600 hover:bg-blue-700'
+                    }`}
                   >
-                    📤 פרסם
+                    {loadingPublish === post.id ? '⏳ מפרסם...' : '📤 פרסם'}
+                  </button>
+                )}
+                {(post.status === 'rejected' || post.status === 'failed') && (
+                  <button
+                    onClick={async () => {
+                      await onReject(post.id);
+                    }}
+                    className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
+                  >
+                    🗑️ מחק
                   </button>
                 )}
               </div>
@@ -905,6 +1252,7 @@ const PostsTab: React.FC<{
                       value={selectedModel}
                       onChange={(e) => setSelectedModel(e.target.value)}
                       className="border rounded px-2 py-1 text-sm"
+                      disabled={loadingRegenerate === post.id}
                     >
                       <option value="">ברירת מחדל</option>
                       {availableModels.map((m) => (
@@ -913,17 +1261,25 @@ const PostsTab: React.FC<{
                     </select>
                     <button
                       onClick={async () => {
+                        setLoadingRegenerate(post.id);
                         await onRegenerate(post.id, selectedModel || undefined);
+                        setLoadingRegenerate(null);
                         setRegeneratingId(null);
                         setSelectedModel('');
                       }}
-                      className="px-3 py-1 bg-purple-600 text-white text-sm rounded hover:bg-purple-700"
+                      disabled={loadingRegenerate === post.id}
+                      className={`px-3 py-1 text-white text-sm rounded ${
+                        loadingRegenerate === post.id 
+                          ? 'bg-gray-400 cursor-wait' 
+                          : 'bg-purple-600 hover:bg-purple-700'
+                      }`}
                     >
-                      🚀 ייצר
+                      {loadingRegenerate === post.id ? '⏳ מייצר...' : '🚀 ייצר'}
                     </button>
                     <button
                       onClick={() => setRegeneratingId(null)}
                       className="px-2 py-1 text-gray-500 text-sm hover:text-gray-700"
+                      disabled={loadingRegenerate === post.id}
                     >
                       ✕
                     </button>
@@ -935,30 +1291,49 @@ const PostsTab: React.FC<{
               {addingImageId === post.id && (
                 <div className="mt-2 p-3 bg-orange-50 rounded border border-orange-200">
                   <div className="flex flex-col gap-2">
-                    <div className="flex items-center gap-2">
-                      <label className="text-sm font-medium">סוג תמונה:</label>
-                      <button
-                        onClick={() => onAddImage(post.id, 'eyal', post.has_image)}
-                        className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
-                      >
-                        👤 תמונה של אייל
-                      </button>
-                      <button
-                        onClick={() => onAddImage(post.id, 'generic', post.has_image)}
-                        className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
-                      >
-                        🎨 תמונה גנרית
-                      </button>
-                      <button
-                        onClick={() => setAddingImageId(null)}
-                        className="px-2 py-1 text-gray-500 text-sm hover:text-gray-700"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                    <p className="text-xs text-gray-500">
-                      {post.has_image ? '⚡ יחליף את התמונה הקיימת' : '✨ ייצר תמונה חדשה וייחודית'}
-                    </p>
+                    {loadingImage === post.id ? (
+                      <div className="flex items-center gap-2 text-orange-600">
+                        <span className="animate-spin">⏳</span>
+                        <span className="font-medium">מייצר תמונה... (זה עלול לקחת עד 30 שניות)</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm font-medium">סוג תמונה:</label>
+                        <button
+                          onClick={async () => {
+                            setLoadingImage(post.id);
+                            await onAddImage(post.id, 'eyal', post.has_image);
+                            setLoadingImage(null);
+                            setAddingImageId(null);
+                          }}
+                          className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                        >
+                          👤 תמונה של אייל
+                        </button>
+                        <button
+                          onClick={async () => {
+                            setLoadingImage(post.id);
+                            await onAddImage(post.id, 'generic', post.has_image);
+                            setLoadingImage(null);
+                            setAddingImageId(null);
+                          }}
+                          className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
+                        >
+                          🎨 תמונה גנרית
+                        </button>
+                        <button
+                          onClick={() => setAddingImageId(null)}
+                          className="px-2 py-1 text-gray-500 text-sm hover:text-gray-700"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
+                    {loadingImage !== post.id && (
+                      <p className="text-xs text-gray-500">
+                        {post.has_image ? '⚡ יחליף את התמונה הקיימת' : '✨ ייצר תמונה חדשה וייחודית'}
+                      </p>
+                    )}
                   </div>
                 </div>
               )}
@@ -1020,22 +1395,37 @@ const PostsTab: React.FC<{
             <p className="text-gray-600 mb-4">
               הפוסט לקבוצה <strong>{deletedPost.groupName}</strong> בקמפיין <strong>{deletedPost.campaignName}</strong> נמחק.
             </p>
-            <p className="text-sm text-gray-500 mb-4">האם לייצר פוסט חדש לקבוצה זו?</p>
+            {loadingNewPost ? (
+              <div className="flex items-center gap-2 text-blue-600 mb-4">
+                <span className="animate-spin">⏳</span>
+                <span className="font-medium">מייצר פוסט חדש... (זה עלול לקחת מספר שניות)</span>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500 mb-4">האם לייצר פוסט חדש לקבוצה זו?</p>
+            )}
             <div className="flex gap-2 justify-end">
               <button
                 onClick={() => setDeletedPost(null)}
                 className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
+                disabled={loadingNewPost}
               >
-                לא, תודה
+                {loadingNewPost ? 'מחכה...' : 'לא, תודה'}
               </button>
               <button
-                onClick={() => {
-                  onRegenerateForGroup(deletedPost.campaignId, deletedPost.groupId);
+                onClick={async () => {
+                  setLoadingNewPost(true);
+                  await onRegenerateForGroup(deletedPost.campaignId, deletedPost.groupId);
+                  setLoadingNewPost(false);
                   setDeletedPost(null);
                 }}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                disabled={loadingNewPost}
+                className={`px-4 py-2 text-white rounded ${
+                  loadingNewPost 
+                    ? 'bg-gray-400 cursor-wait' 
+                    : 'bg-blue-600 hover:bg-blue-700'
+                }`}
               >
-                ✨ ייצר פוסט חדש
+                {loadingNewPost ? '⏳ מייצר...' : '✨ ייצר פוסט חדש'}
               </button>
             </div>
           </div>
@@ -1048,13 +1438,16 @@ const PostsTab: React.FC<{
 // ========== Replies Tab ==========
 const RepliesTab: React.FC<{
   replies: Reply[];
-  onGenerateResponse: (id: number) => void;
-  onSendResponse: (id: number, text?: string, channel?: string) => void;
+  onGenerateResponse: (id: number) => Promise<void>;
+  onSendResponse: (id: number, text?: string, channel?: string) => Promise<void>;
 }> = ({ replies, onGenerateResponse, onSendResponse }) => {
   const [filter, setFilter] = useState<string>('all');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editResponse, setEditResponse] = useState('');
   const [selectedChannel, setSelectedChannel] = useState<string>('comment');
+  // Loading states
+  const [loadingGenerate, setLoadingGenerate] = useState<number | null>(null);
+  const [loadingSend, setLoadingSend] = useState<number | null>(null);
 
   const filteredReplies = replies.filter((r) => filter === 'all' || r.status === filter);
 
@@ -1095,10 +1488,19 @@ const RepliesTab: React.FC<{
               <div className="flex gap-2">
                 {reply.status === 'new' && (
                   <button
-                    onClick={() => onGenerateResponse(reply.id)}
-                    className="px-3 py-1 bg-purple-600 text-white text-sm rounded hover:bg-purple-700"
+                    onClick={async () => {
+                      setLoadingGenerate(reply.id);
+                      await onGenerateResponse(reply.id);
+                      setLoadingGenerate(null);
+                    }}
+                    disabled={loadingGenerate === reply.id}
+                    className={`px-3 py-1 text-white text-sm rounded ${
+                      loadingGenerate === reply.id 
+                        ? 'bg-gray-400 cursor-wait' 
+                        : 'bg-purple-600 hover:bg-purple-700'
+                    }`}
                   >
-                    🤖 צור תשובה
+                    {loadingGenerate === reply.id ? '⏳ מייצר תשובה...' : '🤖 צור תשובה'}
                   </button>
                 )}
               </div>
@@ -1130,13 +1532,20 @@ const RepliesTab: React.FC<{
                         <option value="messenger">מסנג&apos;ר</option>
                       </select>
                       <button
-                        onClick={() => {
-                          onSendResponse(reply.id, editResponse, selectedChannel);
+                        onClick={async () => {
+                          setLoadingSend(reply.id);
+                          await onSendResponse(reply.id, editResponse, selectedChannel);
+                          setLoadingSend(null);
                           setEditingId(null);
                         }}
-                        className="px-3 py-1 bg-green-600 text-white text-sm rounded"
+                        disabled={loadingSend === reply.id}
+                        className={`px-3 py-1 text-white text-sm rounded ${
+                          loadingSend === reply.id 
+                            ? 'bg-gray-400 cursor-wait' 
+                            : 'bg-green-600 hover:bg-green-700'
+                        }`}
                       >
-                        📤 שלח
+                        {loadingSend === reply.id ? '⏳ שולח...' : '📤 שלח'}
                       </button>
                       <button
                         onClick={() => setEditingId(null)}
@@ -1151,10 +1560,19 @@ const RepliesTab: React.FC<{
                     <div className="mb-2">{reply.suggested_response}</div>
                     <div className="flex gap-2">
                       <button
-                        onClick={() => onSendResponse(reply.id)}
-                        className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
+                        onClick={async () => {
+                          setLoadingSend(reply.id);
+                          await onSendResponse(reply.id);
+                          setLoadingSend(null);
+                        }}
+                        disabled={loadingSend === reply.id}
+                        className={`px-3 py-1 text-white text-sm rounded ${
+                          loadingSend === reply.id 
+                            ? 'bg-gray-400 cursor-wait' 
+                            : 'bg-green-600 hover:bg-green-700'
+                        }`}
                       >
-                        ✓ אשר ושלח
+                        {loadingSend === reply.id ? '⏳ שולח...' : '✓ אשר ושלח'}
                       </button>
                       <button
                         onClick={() => {
@@ -1162,6 +1580,7 @@ const RepliesTab: React.FC<{
                           setEditResponse(reply.suggested_response || '');
                           setSelectedChannel(reply.suggested_channel || 'comment');
                         }}
+                        disabled={loadingSend === reply.id}
                         className="px-3 py-1 bg-gray-200 text-sm rounded hover:bg-gray-300"
                       >
                         ✏️ ערוך

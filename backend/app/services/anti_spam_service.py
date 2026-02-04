@@ -151,35 +151,38 @@ class AntiSpamService:
         week_ago = datetime.now() - timedelta(days=7)
         
         # פוסטים היום
-        posts_today = await self.session.execute(
+        posts_today_result = await self.session.execute(
             select(func.count(FacebookPost.id)).where(
                 FacebookPost.published_at >= today_start,
                 FacebookPost.status == "published"
             )
         )
+        posts_today_count = posts_today_result.scalar() or 0
         
         # פוסטים השבוע
-        posts_week = await self.session.execute(
+        posts_week_result = await self.session.execute(
             select(func.count(FacebookPost.id)).where(
                 FacebookPost.published_at >= week_ago,
                 FacebookPost.status == "published"
             )
         )
+        posts_week_count = posts_week_result.scalar() or 0
         
         # קבוצות שפרסמנו אליהן השבוע
-        groups_posted = await self.session.execute(
+        groups_posted_result = await self.session.execute(
             select(func.count(func.distinct(FacebookPost.group_id))).where(
                 FacebookPost.published_at >= week_ago,
                 FacebookPost.status == "published"
             )
         )
+        groups_posted_count = groups_posted_result.scalar() or 0
         
         return {
-            "posts_today": posts_today.scalar() or 0,
+            "posts_today": posts_today_count,
             "max_posts_today": self.settings.fb_max_posts_per_day,
-            "remaining_today": max(0, self.settings.fb_max_posts_per_day - (posts_today.scalar() or 0)),
-            "posts_this_week": posts_week.scalar() or 0,
-            "groups_posted_this_week": groups_posted.scalar() or 0,
+            "remaining_today": max(0, self.settings.fb_max_posts_per_day - posts_today_count),
+            "posts_this_week": posts_week_count,
+            "groups_posted_this_week": groups_posted_count,
             "posting_hours": f"{self.settings.fb_posting_hours_start}:00 - {self.settings.fb_posting_hours_end}:00",
             "min_delay_seconds": self.settings.fb_min_delay_between_posts,
             "max_delay_seconds": self.settings.fb_max_delay_between_posts,

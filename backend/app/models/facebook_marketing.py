@@ -99,6 +99,24 @@ class FacebookCampaign(Base):
     # קשר לתבנית
     template_id = Column(Integer, ForeignKey("facebook_post_templates.id"), nullable=True)
     
+    # === שדות חדשים - קישור למחשבון ===
+    calculator_id = Column(Integer, ForeignKey("calculators.id"), nullable=True)
+    calculator_mode = Column(String(20), default="all")  # specific, all, category
+    calculator_category = Column(String(100), nullable=True)
+    
+    # === שדות חדשים - אסטרטגיות ===
+    strategy_ids = Column(JSON, default=[])  # JSON array of strategy IDs
+    
+    # === שדות חדשים - הגדרות קישור ===
+    link_placement = Column(String(20), default="in_post")  # in_post, first_comment, none
+    
+    # === שדות חדשים - Auto-Responder ===
+    auto_responder_enabled = Column(Boolean, default=False)
+    auto_responder_type = Column(String(20), default="comment")  # comment, messenger, ai_decide
+    auto_responder_template = Column(Text, nullable=True)
+    auto_responder_delay_minutes = Column(Integer, default=5)
+    auto_responder_daily_limit = Column(Integer, default=50)
+    
     # הגדרות
     image_percentage = Column(Integer, default=50)  # אחוז פוסטים עם תמונה
     delay_between_posts = Column(Integer, default=60)  # דקות בין פוסטים
@@ -141,6 +159,17 @@ class FacebookPost(Base):
     # קשרים
     campaign_id = Column(Integer, ForeignKey("facebook_campaigns.id"), nullable=True)
     group_id = Column(Integer, ForeignKey("facebook_groups.id"), nullable=False)
+    
+    # === שדות חדשים - קישור למחשבון ואסטרטגיה ===
+    calculator_id = Column(Integer, ForeignKey("calculators.id"), nullable=True)
+    strategy_id = Column(Integer, ForeignKey("post_strategies.id"), nullable=True)
+    
+    # === שדות חדשים - תגובה ראשונה ===
+    first_comment_content = Column(Text, nullable=True)
+    first_comment_posted = Column(Boolean, default=False)
+    
+    # === שדות חדשים - Auto-Responder ===
+    auto_replies_sent = Column(Integer, default=0)
     
     # מזהה בפייסבוק (אחרי פרסום)
     fb_post_id = Column(String(100), unique=True, nullable=True, index=True)

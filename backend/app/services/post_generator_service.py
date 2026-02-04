@@ -534,6 +534,136 @@ class PostGeneratorService:
         
         logger.info(f"📦 Generated {len(posts)} posts for campaign")
         return posts
+    
+    async def generate_text(
+        self,
+        prompt: str,
+        max_tokens: int = 500,
+        temperature: float = 0.7,
+        model: str = None
+    ) -> Optional[str]:
+        """
+        יצירת טקסט פשוט עם AI
+        
+        Args:
+            prompt: ההנחיה
+            max_tokens: מספר מקסימלי של טוקנים
+            temperature: טמפרטורה
+            model: מודל לשימוש
+            
+        Returns:
+            הטקסט שנוצר
+        """
+        if model is None:
+            model = self._get_available_model()
+        
+        return await self._call_ai(
+            prompt=prompt,
+            system_message="You are a helpful assistant.",
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+    
+    async def generate_strategic_post(
+        self,
+        calculator_name: str,
+        calculator_url: str,
+        calculator_summary: str,
+        strategy_system_prompt: str,
+        strategy_post_template: str,
+        group_name: str,
+        previous_posts: List[str] = None,
+        include_first_comment: bool = False,
+        model: str = None
+    ) -> Dict[str, Any]:
+        """
+        יצירת פוסט עם אסטרטגיה ומחשבון ספציפי
+        
+        Args:
+            calculator_name: שם המחשבון
+            calculator_url: קישור למחשבון
+            calculator_summary: תקציר AI של המחשבון
+            strategy_system_prompt: הנחיות האסטרטגיה ל-AI
+            strategy_post_template: תבנית הפוסט
+            group_name: שם הקבוצה
+            previous_posts: פוסטים קודמים
+            include_first_comment: האם ליצור תגובה ראשונה עם הקישור
+            model: מודל AI לשימוש
+            
+        Returns:
+            dict עם post_content, first_comment_content
+        """
+        result = {
+            "post_content": None,
+            "first_comment_content": None,
+            "error": None
+        }
+        
+        # אם יש תבנית - השתמש בה עם משתנים
+        if strategy_post_template:
+            try:
+                post_content = strategy_post_template.format(
+                    calculator_name=calculator_name,
+                    calculator_url=calculator_url
+                )
+                result["post_content"] = post_content
+            except KeyError as e:
+                logger.warning(f"Template formatting error: {e}, falling back to AI")
+                strategy_post_template = None
+        
+        # אם אין תבנית או נכשלה - צור עם AI
+        if not result["post_content"]:
+            # בניית prompt
+            prompt = f"""
+            צור פוסט לקבוצת פייסבוק "{group_name}" עבור המחשבון:
+            
+            שם המחשבון: {calculator_name}
+            קישור: {calculator_url}
+            תיאור: {calculator_summary or 'מחשבון פיננסי חכם'}
+            
+            הנחיות האסטרטגיה:
+            {strategy_system_prompt}
+            
+            פוסטים קודמים (להימנע מחזרות):
+            {chr(10).join(previous_posts[-3:]) if previous_posts else 'אין'}
+            
+            הנחיות:
+            - כתוב בגוף ראשון, טון אישי
+            - 4-7 שורות
+            - 2-3 אימוג'ים
+            - קריאה לפעולה ברורה
+            
+            החזר רק את טקסט הפוסט.
+            """
+            
+            if model is None:
+                model = self._get_available_model()
+            
+            post_content = await self._call_ai(
+                prompt=prompt,
+                system_message=strategy_system_prompt or "אתה כותב פוסטים אישיים ומושכים לפייסבוק.",
+                model=model,
+                temperature=0.85
+            )
+            
+            if not post_content:
+                result["error"] = "Failed to generate post content"
+                return result
+            
+            result["post_content"] = post_content
+        
+        # יצירת תגובה ראשונה (אם נדרש)
+        if include_first_comment:
+            first_comment = f"""🔗 הנה הקישור למחשבון:
+{calculator_url}
+
+מחשבון {calculator_name} - הטמעה חינמית באתר שלכם!
+לשאלות - שלחו הודעה 💬"""
+            result["first_comment_content"] = first_comment
+        
+        logger.info(f"📝 ✅ Strategic post generated for {group_name} with calculator {calculator_name}")
+        return result
 
 
 # Singleton

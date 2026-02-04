@@ -17,7 +17,8 @@ import {
   FileText,
   Zap,
   Bell,
-  Facebook
+  Facebook,
+  Sparkles
 } from 'lucide-react'
 
 const navigation = [
@@ -29,6 +30,7 @@ const navigation = [
   { name: 'Facebook Marketing', href: '/facebook-marketing', icon: Facebook },
   { name: 'תבניות מייל', href: '/emails/templates', icon: FileText },
   { divider: true, name: 'ניהול' },
+  { name: 'אסטרטגיות פוסטים', href: '/admin/post-strategies', icon: Sparkles },
   { name: 'פרומפטים', href: '/admin/prompts', icon: Bot },
   { name: 'תרחישי תשובות', href: '/admin/scenarios', icon: Zap },
   { name: 'מענה אוטומטי', href: '/settings/auto-reply', icon: Settings },

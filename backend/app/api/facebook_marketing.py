@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from datetime import datetime
 
 from app.database import get_async_session
@@ -65,6 +65,17 @@ class CampaignCreate(BaseModel):
     image_percentage: int = 50
     delay_between_posts: int = 60
     max_posts_per_day: int = 10
+    # New fields
+    calculator_id: Optional[int] = None
+    calculator_mode: str = "all"  # specific, all, category
+    calculator_category: Optional[str] = None
+    strategy_ids: List[int] = []
+    link_placement: str = "in_post"  # in_post, first_comment, none
+    auto_responder_enabled: bool = False
+    auto_responder_type: str = "comment"  # comment, messenger, ai_decide
+    auto_responder_template: Optional[str] = None
+    auto_responder_delay_minutes: int = 5
+    auto_responder_daily_limit: int = 50
 
 class CampaignResponse(BaseModel):
     id: int
@@ -73,12 +84,27 @@ class CampaignResponse(BaseModel):
     target_audience: Optional[str]
     status: str
     image_percentage: int
-    target_group_ids: List[int] = []
+    target_group_ids: Optional[List[int]] = []
     total_posts_generated: int
     total_posts_approved: int
     total_posts_published: int
     total_replies: int
     created_at: datetime
+    # New fields
+    calculator_id: Optional[int] = None
+    calculator_mode: Optional[str] = "all"
+    calculator_category: Optional[str] = None
+    strategy_ids: Optional[List[int]] = None
+    link_placement: Optional[str] = "in_post"
+    auto_responder_enabled: Optional[bool] = False
+    auto_responder_type: Optional[str] = "comment"
+    auto_responder_template: Optional[str] = None
+    auto_responder_delay_minutes: Optional[int] = 5
+    auto_responder_daily_limit: Optional[int] = 50
+    
+    @validator('strategy_ids', 'target_group_ids', pre=True, always=True)
+    def convert_none_to_list(cls, v):
+        return v if v is not None else []
     
     class Config:
         from_attributes = True
@@ -95,6 +121,12 @@ class PostResponse(BaseModel):
     replies_count: int
     published_at: Optional[datetime]
     created_at: datetime
+    # New fields
+    calculator_id: Optional[int] = None
+    strategy_id: Optional[int] = None
+    first_comment_content: Optional[str] = None
+    first_comment_posted: bool = False
+    auto_replies_sent: int = 0
     
     class Config:
         from_attributes = True
@@ -109,6 +141,17 @@ class CampaignUpdate(BaseModel):
     image_percentage: Optional[int] = None
     status: Optional[str] = None
     target_group_ids: Optional[List[int]] = None
+    # New fields
+    calculator_id: Optional[int] = None
+    calculator_mode: Optional[str] = None
+    calculator_category: Optional[str] = None
+    strategy_ids: Optional[List[int]] = None
+    link_placement: Optional[str] = None
+    auto_responder_enabled: Optional[bool] = None
+    auto_responder_type: Optional[str] = None
+    auto_responder_template: Optional[str] = None
+    auto_responder_delay_minutes: Optional[int] = None
+    auto_responder_daily_limit: Optional[int] = None
 
 class ReplyResponse(BaseModel):
     id: int
@@ -692,11 +735,20 @@ async def get_anti_spam_stats(
     session: AsyncSession = Depends(get_async_session)
 ):
     """קבלת סטטיסטיקות Anti-Spam"""
-    from app.services.anti_spam_service import get_anti_spam_service
+    import traceback
+    import logging
+    logger = logging.getLogger(__name__)
     
-    anti_spam = get_anti_spam_service(session)
-    stats = await anti_spam.get_posting_stats()
-    return stats
+    try:
+        from app.services.anti_spam_service import get_anti_spam_service
+        
+        anti_spam = get_anti_spam_service(session)
+        stats = await anti_spam.get_posting_stats()
+        return stats
+    except Exception as e:
+        logger.error(f"Anti-Spam stats error: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/anti-spam/can-post", tags=["Anti-Spam"])
@@ -805,6 +857,52 @@ async def sync_post_comments(
         "post_id": post_id,
         "new_replies": len(replies)
     }
+
+
+# ========== Calculators ==========
+
+@router.get("/calculators", tags=["Calculators"])
+async def get_calculators_for_facebook(
+    active_only: bool = True,
+    category: Optional[str] = None,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """שליפת מחשבונים לבחירה בקמפיין"""
+    from app.models.calculator import Calculator
+    
+    query = select(Calculator)
+    if active_only:
+        query = query.where(Calculator.is_active == True)
+    if category:
+        query = query.where(Calculator.category == category)
+    
+    result = await session.execute(query)
+    calculators = result.scalars().all()
+    
+    return [
+        {
+            "id": c.id,
+            "name": c.name,
+            "category": c.category,
+            "url": c.target_url,
+            "has_summary": bool(c.ai_summary) if hasattr(c, 'ai_summary') else False
+        }
+        for c in calculators
+    ]
+
+@router.get("/calculator-categories", tags=["Calculators"])
+async def get_calculator_categories(
+    session: AsyncSession = Depends(get_async_session)
+):
+    """שליפת קטגוריות מחשבונים"""
+    from app.models.calculator import Calculator
+    
+    result = await session.execute(
+        select(Calculator.category).distinct().where(Calculator.category.isnot(None))
+    )
+    categories = [row[0] for row in result.fetchall() if row[0]]
+    
+    return {"categories": categories}
 
 
 # ========== Statistics ==========

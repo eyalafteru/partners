@@ -23,6 +23,8 @@ from app.services.apify_service import get_apify_service
 COMMENT_SYNC_INTERVAL = 300  # 5 דקות
 RESPONSE_GENERATION_INTERVAL = 60  # דקה
 PUBLISH_CHECK_INTERVAL = 120  # 2 דקות
+FIRST_COMMENT_INTERVAL = 120  # 2 דקות - בדיקת תגובות ראשונות
+AUTO_RESPOND_INTERVAL = 300  # 5 דקות - תשובות אוטומטיות
 
 
 async def sync_all_post_comments():
@@ -192,6 +194,120 @@ async def start_publish_scheduler():
         await asyncio.sleep(PUBLISH_CHECK_INTERVAL)
 
 
+async def post_first_comments():
+    """
+    פרסום תגובות ראשונות לפוסטים חדשים
+    מחפש פוסטים שפורסמו ויש להם תוכן תגובה ראשונה אבל עדיין לא נשלחה
+    """
+    try:
+        async with get_async_session_context() as session:
+            from app.services.auto_responder_service import get_auto_responder_service
+            
+            service = get_auto_responder_service(session)
+            posts = await service.get_posts_needing_first_comment()
+            
+            if not posts:
+                return
+            
+            logger.info(f"💬 Posting first comments for {len(posts)} posts...")
+            
+            posted_count = 0
+            for post in posts:
+                try:
+                    success = await service.post_first_comment(post.id)
+                    if success:
+                        posted_count += 1
+                    # השהייה בין פוסטים למניעת חסימה
+                    await asyncio.sleep(30)
+                except Exception as e:
+                    logger.error(f"Error posting first comment for post {post.id}: {e}")
+            
+            await session.commit()
+            
+            if posted_count > 0:
+                logger.info(f"💬 ✅ Posted {posted_count} first comments")
+                
+    except Exception as e:
+        logger.error(f"💬 ❌ First comment error: {e}")
+
+
+async def auto_respond_to_comments():
+    """
+    תשובות אוטומטיות לתגובות על פוסטים
+    מחפש קמפיינים עם Auto-Responder פעיל ושולח תשובות
+    """
+    try:
+        async with get_async_session_context() as session:
+            from app.services.auto_responder_service import get_auto_responder_service
+            from app.models.facebook_marketing import FacebookCampaign
+            
+            # מציאת קמפיינים עם auto-responder פעיל
+            result = await session.execute(
+                select(FacebookCampaign).where(
+                    and_(
+                        FacebookCampaign.auto_responder_enabled == True,
+                        FacebookCampaign.status.in_(["ready", "publishing", "completed"])
+                    )
+                )
+            )
+            campaigns = result.scalars().all()
+            
+            if not campaigns:
+                return
+            
+            logger.info(f"🤖 Checking auto-respond for {len(campaigns)} campaigns...")
+            
+            service = get_auto_responder_service(session)
+            total_responses = 0
+            
+            for campaign in campaigns:
+                try:
+                    count = await service.check_and_respond_to_comments(campaign.id)
+                    total_responses += count
+                except Exception as e:
+                    logger.error(f"Error auto-responding for campaign {campaign.id}: {e}")
+            
+            await session.commit()
+            
+            if total_responses > 0:
+                logger.info(f"🤖 ✅ Sent {total_responses} auto-responses")
+                
+    except Exception as e:
+        logger.error(f"🤖 ❌ Auto-respond error: {e}")
+
+
+async def start_first_comment_task():
+    """
+    התחלת task תגובות ראשונות
+    רץ ברקע ומפרסם תגובות ראשונות לפוסטים חדשים
+    """
+    logger.info("💬 Facebook First Comment Task started")
+    
+    while True:
+        try:
+            await post_first_comments()
+        except Exception as e:
+            logger.error(f"💬 First comment task error: {e}")
+        
+        await asyncio.sleep(FIRST_COMMENT_INTERVAL)
+
+
+async def start_auto_responder_task():
+    """
+    התחלת task תשובות אוטומטיות
+    רץ ברקע ושולח תשובות למגיבים
+    """
+    logger.info("🤖 Facebook Auto-Responder Task started")
+    
+    while True:
+        try:
+            await auto_respond_to_comments()
+        except Exception as e:
+            logger.error(f"🤖 Auto-responder task error: {e}")
+        
+        await asyncio.sleep(AUTO_RESPOND_INTERVAL)
+
+
 async def start_facebook_tasks():
     """
     התחלת כל ה-tasks של פייסבוק
@@ -203,5 +319,7 @@ async def start_facebook_tasks():
         start_comment_monitor(),
         start_response_generator(),
         start_publish_scheduler(),
+        start_first_comment_task(),
+        start_auto_responder_task(),
         return_exceptions=True
     )
