@@ -738,10 +738,16 @@ const PostsTab: React.FC<{
   onReject: (id: number, reason?: string) => void;
   onPublish: (id: number) => void;
   onUpdate: (id: number, content: string) => void;
-}> = ({ posts, groups, onApprove, onReject, onPublish, onUpdate }) => {
+  onRegenerate: (id: number, model?: string) => void;
+  onAddImage: (id: number) => void;
+  availableModels: { id: string; name: string }[];
+}> = ({ posts, groups, onApprove, onReject, onPublish, onUpdate, onRegenerate, onAddImage, availableModels }) => {
   const [filter, setFilter] = useState<string>('all');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editContent, setEditContent] = useState('');
+  const [regeneratingId, setRegeneratingId] = useState<number | null>(null);
+  const [selectedModel, setSelectedModel] = useState<string>('');
+  const [addingImageId, setAddingImageId] = useState<number | null>(null);
 
   const filteredPosts = posts.filter((p) => filter === 'all' || p.status === filter);
   const groupsMap = Object.fromEntries(groups.map((g) => [g.id, g.name]));
@@ -773,7 +779,7 @@ const PostsTab: React.FC<{
                 <span className="text-sm text-gray-500">{groupsMap[post.group_id] || 'קבוצה לא ידועה'}</span>
                 {post.has_image && <span className="text-sm">🖼️</span>}
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 {post.status === 'pending_approval' && (
                   <>
                     <button
@@ -797,6 +803,25 @@ const PostsTab: React.FC<{
                     >
                       ✏️ ערוך
                     </button>
+                    <button
+                      onClick={() => setRegeneratingId(regeneratingId === post.id ? null : post.id)}
+                      className="px-3 py-1 bg-purple-600 text-white text-sm rounded hover:bg-purple-700"
+                    >
+                      🔄 ייצר מחדש
+                    </button>
+                    {!post.has_image && (
+                      <button
+                        onClick={async () => {
+                          setAddingImageId(post.id);
+                          await onAddImage(post.id);
+                          setAddingImageId(null);
+                        }}
+                        disabled={addingImageId === post.id}
+                        className="px-3 py-1 bg-orange-500 text-white text-sm rounded hover:bg-orange-600 disabled:opacity-50"
+                      >
+                        {addingImageId === post.id ? '⏳...' : '🖼️ הוסף תמונה'}
+                      </button>
+                    )}
                   </>
                 )}
                 {post.status === 'approved' && (
@@ -808,6 +833,41 @@ const PostsTab: React.FC<{
                   </button>
                 )}
               </div>
+              
+              {/* Regenerate Modal */}
+              {regeneratingId === post.id && (
+                <div className="mt-2 p-3 bg-purple-50 rounded border border-purple-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <label className="text-sm font-medium">בחר מודל:</label>
+                    <select
+                      value={selectedModel}
+                      onChange={(e) => setSelectedModel(e.target.value)}
+                      className="border rounded px-2 py-1 text-sm"
+                    >
+                      <option value="">ברירת מחדל</option>
+                      {availableModels.map((m) => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={async () => {
+                        await onRegenerate(post.id, selectedModel || undefined);
+                        setRegeneratingId(null);
+                        setSelectedModel('');
+                      }}
+                      className="px-3 py-1 bg-purple-600 text-white text-sm rounded hover:bg-purple-700"
+                    >
+                      🚀 ייצר
+                    </button>
+                    <button
+                      onClick={() => setRegeneratingId(null)}
+                      className="px-2 py-1 text-gray-500 text-sm hover:text-gray-700"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              )
             </div>
 
             {editingId === post.id ? (
@@ -1014,6 +1074,7 @@ export default function FacebookMarketingPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [posts, setPosts] = useState<Post[]>([]);
   const [replies, setReplies] = useState<Reply[]>([]);
+  const [availableModels, setAvailableModels] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -1021,12 +1082,13 @@ export default function FacebookMarketingPage() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [statsRes, groupsRes, campaignsRes, postsRes, repliesRes] = await Promise.all([
+      const [statsRes, groupsRes, campaignsRes, postsRes, repliesRes, modelsRes] = await Promise.all([
         fetch(`${API_BASE}/stats`),
         fetch(`${API_BASE}/groups`),
         fetch(`${API_BASE}/campaigns`),
         fetch(`${API_BASE}/posts`),
         fetch(`${API_BASE}/replies`),
+        fetch(`${API_BASE}/ai/models`),
       ]);
 
       if (statsRes.ok) setStats(await statsRes.json());
@@ -1034,6 +1096,10 @@ export default function FacebookMarketingPage() {
       if (campaignsRes.ok) setCampaigns(await campaignsRes.json());
       if (postsRes.ok) setPosts(await postsRes.json());
       if (repliesRes.ok) setReplies(await repliesRes.json());
+      if (modelsRes.ok) {
+        const modelsData = await modelsRes.json();
+        setAvailableModels(modelsData.models || []);
+      }
       
       setError(null);
     } catch (err) {
@@ -1175,6 +1241,36 @@ export default function FacebookMarketingPage() {
     }
   };
 
+  const regeneratePost = async (postId: number, model?: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/posts/${postId}/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      });
+      if (res.ok) {
+        const updatedPost = await res.json();
+        setPosts(posts.map((p) => (p.id === postId ? updatedPost : p)));
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const addImageToPost = async (postId: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/posts/${postId}/add-image`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const updatedPost = await res.json();
+        setPosts(posts.map((p) => (p.id === postId ? updatedPost : p)));
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const generateReplyResponse = async (replyId: number) => {
     try {
       const res = await fetch(`${API_BASE}/replies/${replyId}/generate`, { method: 'POST' });
@@ -1269,6 +1365,9 @@ export default function FacebookMarketingPage() {
             onReject={rejectPost}
             onPublish={publishPost}
             onUpdate={updatePost}
+            onRegenerate={regeneratePost}
+            onAddImage={addImageToPost}
+            availableModels={availableModels}
           />
         )}
         {activeTab === 'replies' && (

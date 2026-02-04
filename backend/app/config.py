@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     # ========== AI - OpenAI GPT ==========
     openai_api_key: str = ""
     
+    # ========== AI - Anthropic Claude ==========
+    anthropic_api_key: str = ""
+    
+    # ========== AI - Default Model ==========
+    # Options: "gpt-4o-mini", "gpt-4o", "claude-sonnet-4", "claude-sonnet-4-5"
+    default_ai_model: str = "gpt-4o-mini"
+    
     # ========== WhatsApp - Green-API ==========
     green_api_instance: str = ""
     green_api_token: str = ""

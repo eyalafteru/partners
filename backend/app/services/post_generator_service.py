@@ -74,29 +74,70 @@ Return ONLY the image prompt."""
 
 
 class PostGeneratorService:
-    """שירות יצירת פוסטים עם GPT"""
+    """שירות יצירת פוסטים עם GPT/Claude"""
     
     def __init__(self):
         self.openai_api_key = settings.openai_api_key
+        self.anthropic_api_key = getattr(settings, 'anthropic_api_key', '')
+        self.default_model = getattr(settings, 'default_ai_model', 'gpt-4o-mini')
         self.replicate_service = get_replicate_service()
     
     @property
     def is_configured(self) -> bool:
         """בדיקה אם השירות מוגדר"""
-        return bool(self.openai_api_key)
+        return bool(self.openai_api_key) or bool(self.anthropic_api_key)
     
-    async def _call_gpt(
+    def get_available_models(self) -> List[Dict[str, str]]:
+        """רשימת מודלים זמינים"""
+        models = []
+        if self.openai_api_key:
+            models.extend([
+                {"id": "gpt-4o-mini", "name": "GPT-4o Mini (מהיר וזול)"},
+                {"id": "gpt-4o", "name": "GPT-4o (איכותי)"},
+            ])
+        if self.anthropic_api_key:
+            models.extend([
+                {"id": "claude-sonnet-4", "name": "Claude Sonnet 4"},
+                {"id": "claude-sonnet-4-5", "name": "Claude Sonnet 4.5 (הכי חדש)"},
+            ])
+        return models
+    
+    async def _call_ai(
         self,
         prompt: str,
         system_message: str = "You are a helpful marketing assistant.",
-        model: str = "gpt-4o-mini",
+        model: str = None,
         temperature: float = 0.8,
         max_tokens: int = 1000
     ) -> Optional[str]:
         """
-        קריאה ל-OpenAI GPT
+        קריאה ל-AI (GPT או Claude)
         """
         if not self.is_configured:
+            logger.error("No AI API key configured")
+            return None
+        
+        # בחירת מודל ברירת מחדל
+        if model is None:
+            model = self.default_model
+        
+        # Claude models
+        if model.startswith("claude"):
+            return await self._call_claude(prompt, system_message, model, temperature, max_tokens)
+        # OpenAI models
+        else:
+            return await self._call_openai(prompt, system_message, model, temperature, max_tokens)
+    
+    async def _call_openai(
+        self,
+        prompt: str,
+        system_message: str,
+        model: str,
+        temperature: float,
+        max_tokens: int
+    ) -> Optional[str]:
+        """קריאה ל-OpenAI GPT"""
+        if not self.openai_api_key:
             logger.error("OpenAI API key not configured")
             return None
         
@@ -125,12 +166,68 @@ class PostGeneratorService:
                     data = response.json()
                     return data["choices"][0]["message"]["content"].strip()
                 else:
-                    logger.error(f"GPT API error: {response.status_code} - {response.text}")
+                    logger.error(f"OpenAI API error: {response.status_code} - {response.text}")
                     return None
                     
         except Exception as e:
-            logger.error(f"GPT call error: {e}")
+            logger.error(f"OpenAI call error: {e}")
             return None
+    
+    async def _call_claude(
+        self,
+        prompt: str,
+        system_message: str,
+        model: str,
+        temperature: float,
+        max_tokens: int
+    ) -> Optional[str]:
+        """קריאה ל-Anthropic Claude"""
+        if not self.anthropic_api_key:
+            logger.error("Anthropic API key not configured")
+            return None
+        
+        # Map friendly names to API model names
+        model_map = {
+            "claude-sonnet-4": "claude-sonnet-4-20250514",
+            "claude-sonnet-4-5": "claude-sonnet-4-5-20250514",
+        }
+        api_model = model_map.get(model, model)
+        
+        url = "https://api.anthropic.com/v1/messages"
+        
+        headers = {
+            "x-api-key": self.anthropic_api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": api_model,
+            "max_tokens": max_tokens,
+            "system": system_message,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ]
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(url, json=payload, headers=headers)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    return data["content"][0]["text"].strip()
+                else:
+                    logger.error(f"Claude API error: {response.status_code} - {response.text}")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"Claude call error: {e}")
+            return None
+    
+    # Backward compatibility
+    async def _call_gpt(self, *args, **kwargs) -> Optional[str]:
+        return await self._call_ai(*args, **kwargs)
     
     async def generate_post_variation(
         self,
@@ -139,7 +236,8 @@ class PostGeneratorService:
         target_audience: str = "",
         base_template: str = "",
         previous_posts: List[str] = None,
-        additional_instructions: str = ""
+        additional_instructions: str = "",
+        model: str = None
     ) -> Optional[str]:
         """
         יצירת וריאציה ייחודית של פוסט
@@ -171,9 +269,10 @@ class PostGeneratorService:
             additional_instructions=additional_instructions or "אין"
         )
         
-        result = await self._call_gpt(
+        result = await self._call_ai(
             prompt=prompt,
             system_message="אתה מומחה שיווק דיגיטלי לעסקים B2B. אתה כותב פוסטים לקבוצות פייסבוק של בעלי אתרים, יזמים ומשווקים. המטרה שלך היא לגרום להם להטמיע מחשבונים פיננסיים חינמיים באתר שלהם. אתה כותב בעברית, בטון מקצועי אבל נגיש.",
+            model=model,
             temperature=0.85
         )
         

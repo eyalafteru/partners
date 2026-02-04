@@ -538,6 +538,118 @@ async def publish_post(
     return post
 
 
+class RegenerateRequest(BaseModel):
+    model: Optional[str] = None  # gpt-4o-mini, claude-sonnet-4, etc.
+
+
+@router.post("/posts/{post_id}/regenerate", response_model=PostResponse, tags=["Posts"])
+async def regenerate_post(
+    post_id: int,
+    data: RegenerateRequest = RegenerateRequest(),
+    session: AsyncSession = Depends(get_async_session)
+):
+    """ייצור מחדש של פוסט"""
+    from app.services.post_generator_service import get_post_generator_service
+    
+    # Get post with group info
+    result = await session.execute(
+        select(FacebookPost).where(FacebookPost.id == post_id)
+    )
+    post = result.scalar_one_or_none()
+    
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    # Get group
+    group_result = await session.execute(
+        select(FacebookGroup).where(FacebookGroup.id == post.group_id)
+    )
+    group = group_result.scalar_one_or_none()
+    
+    # Get campaign
+    campaign = None
+    if post.campaign_id:
+        campaign_result = await session.execute(
+            select(FacebookCampaign).where(FacebookCampaign.id == post.campaign_id)
+        )
+        campaign = campaign_result.scalar_one_or_none()
+    
+    # Generate new content
+    generator = get_post_generator_service()
+    new_content = await generator.generate_post_variation(
+        topic=campaign.topic if campaign else "מחשבונים פיננסיים להטמעה בחינם",
+        group_name=group.name if group else "",
+        target_audience=campaign.target_audience if campaign else "",
+        previous_posts=[post.content],  # Avoid same content
+        model=data.model
+    )
+    
+    if not new_content:
+        raise HTTPException(status_code=500, detail="Failed to regenerate post")
+    
+    post.content = new_content
+    post.status = "pending_approval"
+    
+    await session.commit()
+    await session.refresh(post)
+    return post
+
+
+@router.post("/posts/{post_id}/add-image", response_model=PostResponse, tags=["Posts"])
+async def add_image_to_post(
+    post_id: int,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """הוספת תמונה לפוסט"""
+    from app.services.post_generator_service import get_post_generator_service
+    from app.services.replicate_service import get_replicate_service
+    
+    result = await session.execute(
+        select(FacebookPost).where(FacebookPost.id == post_id)
+    )
+    post = result.scalar_one_or_none()
+    
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    # Generate image prompt
+    generator = get_post_generator_service()
+    image_prompt = await generator.generate_image_prompt(
+        post_content=post.content,
+        topic="מחשבונים פיננסיים"
+    )
+    
+    if not image_prompt:
+        raise HTTPException(status_code=500, detail="Failed to generate image prompt")
+    
+    # Generate image
+    replicate_service = get_replicate_service()
+    image_url = await replicate_service.generate_post_image(image_prompt)
+    
+    if not image_url:
+        raise HTTPException(status_code=500, detail="Failed to generate image")
+    
+    post.has_image = True
+    post.image_prompt = image_prompt
+    post.image_url = image_url
+    
+    await session.commit()
+    await session.refresh(post)
+    return post
+
+
+@router.get("/ai/models", tags=["AI"])
+async def get_available_models():
+    """קבלת רשימת מודלים זמינים"""
+    from app.services.post_generator_service import get_post_generator_service
+    
+    generator = get_post_generator_service()
+    return {
+        "models": generator.get_available_models(),
+        "default": generator.default_model
+    }
+
+
 # ========== Replies Endpoints ==========
 
 @router.get("/replies", response_model=List[ReplyResponse], tags=["Replies"])
