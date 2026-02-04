@@ -101,6 +101,13 @@ class PostResponse(BaseModel):
 class PostUpdate(BaseModel):
     content: Optional[str] = None
 
+class CampaignUpdate(BaseModel):
+    name: Optional[str] = None
+    topic: Optional[str] = None
+    target_audience: Optional[str] = None
+    image_percentage: Optional[int] = None
+    status: Optional[str] = None
+
 class ReplyResponse(BaseModel):
     id: int
     post_id: int
@@ -372,6 +379,32 @@ async def get_campaign(
     
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    return campaign
+
+@router.put("/campaigns/{campaign_id}", response_model=CampaignResponse, tags=["Campaigns"])
+async def update_campaign(
+    campaign_id: int,
+    data: CampaignUpdate,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """עדכון קמפיין"""
+    result = await session.execute(
+        select(FacebookCampaign).where(FacebookCampaign.id == campaign_id)
+    )
+    campaign = result.scalar_one_or_none()
+    
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    # עדכון שדות
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if value is not None:
+            setattr(campaign, field, value)
+    
+    await session.commit()
+    await session.refresh(campaign)
     
     return campaign
 

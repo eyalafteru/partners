@@ -337,8 +337,12 @@ const CampaignsTab: React.FC<{
   groups: Group[];
   onCreate: (data: any) => void;
   onGenerate: (id: number) => void;
-}> = ({ campaigns, groups, onCreate, onGenerate }) => {
+  onUpdate: (id: number, data: any) => void;
+}> = ({ campaigns, groups, onCreate, onGenerate, onUpdate }) => {
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
+  const [expandedCampaign, setExpandedCampaign] = useState<number | null>(null);
+  const [groupSearch, setGroupSearch] = useState('');
   const [formData, setFormData] = useState({
     name: '',
     topic: 'מחשבונים פיננסיים להטמעה בחינם',
@@ -346,6 +350,36 @@ const CampaignsTab: React.FC<{
     target_group_ids: [] as number[],
     image_percentage: 50,
   });
+  const [editFormData, setEditFormData] = useState({
+    name: '',
+    topic: '',
+    target_audience: '',
+    image_percentage: 50,
+  });
+
+  // Filter groups by search
+  const filteredGroups = groups.filter(g => 
+    g.name.toLowerCase().includes(groupSearch.toLowerCase()) ||
+    g.fb_group_id.includes(groupSearch)
+  );
+
+  const startEdit = (campaign: Campaign) => {
+    setEditingCampaign(campaign);
+    setEditFormData({
+      name: campaign.name,
+      topic: campaign.topic,
+      target_audience: campaign.target_audience || '',
+      image_percentage: campaign.image_percentage,
+    });
+  };
+
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingCampaign) {
+      onUpdate(editingCampaign.id, editFormData);
+      setEditingCampaign(null);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -414,9 +448,32 @@ const CampaignsTab: React.FC<{
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">קבוצות יעד</label>
-            <div className="border rounded p-2 max-h-40 overflow-y-auto">
-              {groups.map((group) => (
+            <label className="block text-sm font-medium mb-1">קבוצות יעד ({formData.target_group_ids.length} נבחרו)</label>
+            <input
+              type="text"
+              placeholder="🔍 חפש קבוצות..."
+              value={groupSearch}
+              onChange={(e) => setGroupSearch(e.target.value)}
+              className="w-full border rounded px-3 py-2 mb-2"
+            />
+            <div className="flex gap-2 mb-2">
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, target_group_ids: filteredGroups.map(g => g.id) })}
+                className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+              >
+                בחר הכל ({filteredGroups.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, target_group_ids: [] })}
+                className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+              >
+                נקה הכל
+              </button>
+            </div>
+            <div className="border rounded p-2 max-h-60 overflow-y-auto">
+              {filteredGroups.map((group) => (
                 <label key={group.id} className="flex items-center gap-2 p-1 hover:bg-gray-50">
                   <input
                     type="checkbox"
@@ -432,6 +489,9 @@ const CampaignsTab: React.FC<{
                   <span className="text-sm">{group.name}</span>
                 </label>
               ))}
+              {filteredGroups.length === 0 && (
+                <div className="text-center text-gray-500 py-2">לא נמצאו קבוצות</div>
+              )}
             </div>
           </div>
           <div className="flex gap-2">
@@ -445,33 +505,126 @@ const CampaignsTab: React.FC<{
         </form>
       )}
 
+      {/* Edit Campaign Modal */}
+      {editingCampaign && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-lg">
+            <h3 className="font-bold text-lg mb-4">✏️ עריכת קמפיין: {editingCampaign.name}</h3>
+            <form onSubmit={handleEditSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">שם הקמפיין</label>
+                <input
+                  type="text"
+                  value={editFormData.name}
+                  onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                  className="w-full border rounded px-3 py-2"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">נושא</label>
+                <input
+                  type="text"
+                  value={editFormData.topic}
+                  onChange={(e) => setEditFormData({ ...editFormData, topic: e.target.value })}
+                  className="w-full border rounded px-3 py-2"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">קהל יעד</label>
+                <input
+                  type="text"
+                  value={editFormData.target_audience}
+                  onChange={(e) => setEditFormData({ ...editFormData, target_audience: e.target.value })}
+                  className="w-full border rounded px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">אחוז תמונות</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={editFormData.image_percentage}
+                  onChange={(e) => setEditFormData({ ...editFormData, image_percentage: parseInt(e.target.value) })}
+                  className="w-full border rounded px-3 py-2"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                  💾 שמור שינויים
+                </button>
+                <button type="button" onClick={() => setEditingCampaign(null)} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300">
+                  ביטול
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Campaigns List */}
       <div className="space-y-4">
         {campaigns.map((campaign) => (
-          <div key={campaign.id} className="bg-white p-4 rounded-lg shadow">
-            <div className="flex justify-between items-start">
-              <div>
-                <h3 className="font-bold text-lg">{campaign.name}</h3>
-                <p className="text-gray-600">{campaign.topic}</p>
-                <div className="flex gap-4 mt-2 text-sm text-gray-500">
-                  <span>📝 {campaign.total_posts_generated} נוצרו</span>
-                  <span>✅ {campaign.total_posts_approved} אושרו</span>
-                  <span>📤 {campaign.total_posts_published} פורסמו</span>
-                  <span>💬 {campaign.total_replies} תגובות</span>
+          <div key={campaign.id} className="bg-white rounded-lg shadow">
+            <div className="p-4">
+              <div className="flex justify-between items-start">
+                <div 
+                  className="flex-1 cursor-pointer"
+                  onClick={() => setExpandedCampaign(expandedCampaign === campaign.id ? null : campaign.id)}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-400">{expandedCampaign === campaign.id ? '▼' : '▶'}</span>
+                    <h3 className="font-bold text-lg">{campaign.name}</h3>
+                  </div>
+                  <p className="text-gray-600 mr-6">{campaign.topic}</p>
+                  <div className="flex gap-4 mt-2 text-sm text-gray-500 mr-6">
+                    <span>📝 {campaign.total_posts_generated} נוצרו</span>
+                    <span>✅ {campaign.total_posts_approved} אושרו</span>
+                    <span>📤 {campaign.total_posts_published} פורסמו</span>
+                    <span>💬 {campaign.total_replies} תגובות</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <StatusBadge status={campaign.status} />
+                  <button
+                    onClick={() => startEdit(campaign)}
+                    className="px-3 py-1 bg-gray-100 text-gray-700 text-sm rounded hover:bg-gray-200"
+                  >
+                    ✏️ ערוך
+                  </button>
+                  {campaign.status === 'draft' && (
+                    <button
+                      onClick={() => onGenerate(campaign.id)}
+                      className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
+                    >
+                      ⚡ צור פוסטים
+                    </button>
+                  )}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <StatusBadge status={campaign.status} />
-                {campaign.status === 'draft' && (
-                  <button
-                    onClick={() => onGenerate(campaign.id)}
-                    className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
-                  >
-                    ⚡ צור פוסטים
-                  </button>
-                )}
-              </div>
             </div>
+            
+            {/* Expanded Campaign Details */}
+            {expandedCampaign === campaign.id && (
+              <div className="border-t p-4 bg-gray-50">
+                <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
+                  <div>
+                    <span className="text-gray-500">קהל יעד:</span>
+                    <span className="mr-2 font-medium">{campaign.target_audience || 'לא הוגדר'}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">אחוז תמונות:</span>
+                    <span className="mr-2 font-medium">{campaign.image_percentage}%</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">תאריך יצירה:</span>
+                    <span className="mr-2 font-medium">{new Date(campaign.created_at).toLocaleDateString('he-IL')}</span>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         ))}
         {campaigns.length === 0 && (
@@ -850,6 +1003,22 @@ export default function FacebookMarketingPage() {
     }
   };
 
+  const updateCampaign = async (campaignId: number, data: any) => {
+    try {
+      const res = await fetch(`${API_BASE}/campaigns/${campaignId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const updatedCampaign = await res.json();
+        setCampaigns(campaigns.map((c) => (c.id === campaignId ? updatedCampaign : c)));
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const generatePosts = async (campaignId: number) => {
     try {
       const res = await fetch(`${API_BASE}/campaigns/${campaignId}/generate`, {
@@ -996,6 +1165,7 @@ export default function FacebookMarketingPage() {
             groups={groups}
             onCreate={createCampaign}
             onGenerate={generatePosts}
+            onUpdate={updateCampaign}
           />
         )}
         {activeTab === 'posts' && (
