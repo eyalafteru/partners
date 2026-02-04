@@ -89,6 +89,16 @@ class Settings(BaseSettings):
     # ========== Facebook - Cookie for Apify Actors ==========
     facebook_cookie: str = ""  # JSON cookie from browser extension
     
+    # ========== Facebook - Anti-Spam Settings ==========
+    fb_max_posts_per_day: int = 10  # מקסימום פוסטים ליום
+    fb_max_posts_per_group_per_week: int = 1  # מקסימום פוסט לקבוצה בשבוע
+    fb_min_delay_between_posts: int = 300  # מינימום 5 דקות בין פוסטים (בשניות)
+    fb_max_delay_between_posts: int = 900  # מקסימום 15 דקות בין פוסטים (בשניות)
+    fb_posting_hours_start: int = 8  # שעת התחלה לפרסום (08:00)
+    fb_posting_hours_end: int = 22  # שעת סיום לפרסום (22:00)
+    fb_max_replies_per_hour: int = 20  # מקסימום תגובות בשעה
+    fb_cooldown_after_block: int = 86400  # המתנה של 24 שעות אחרי חסימה (בשניות)
+    
     # ========== Replicate - Image Generation ==========
     replicate_api_token: str = ""  # Set via REPLICATE_API_TOKEN env variable
     replicate_flux_version: str = "091495765fa5ef2725a175a57b276ec30dc9d39c22d30410f2ede68a3eab66b3"

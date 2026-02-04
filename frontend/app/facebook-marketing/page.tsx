@@ -71,6 +71,17 @@ interface Stats {
     total: number;
     pending: number;
   };
+  anti_spam?: {
+    posts_today: number;
+    max_posts_today: number;
+    remaining_today: number;
+    posts_this_week: number;
+    groups_posted_this_week: number;
+    posting_hours: string;
+    min_delay_seconds: number;
+    max_delay_seconds: number;
+    can_post_now: boolean;
+  };
 }
 
 // Use relative URL for production (nginx proxy) or localhost for development
@@ -190,6 +201,45 @@ const DashboardTab: React.FC<{ stats: Stats | null; onRefresh: () => void }> = (
           </div>
         </div>
       </div>
+
+      {/* Anti-Spam Stats */}
+      {stats.anti_spam && (
+        <div className="bg-white p-6 rounded-lg shadow border-t-4 border-red-500">
+          <h3 className="text-lg font-bold mb-4">🛡️ הגנת Anti-Spam</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="text-center">
+              <div className="text-2xl font-bold text-blue-600">
+                {stats.anti_spam.posts_today}/{stats.anti_spam.max_posts_today}
+              </div>
+              <div className="text-sm text-gray-500">פוסטים היום</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-green-600">
+                {stats.anti_spam.remaining_today}
+              </div>
+              <div className="text-sm text-gray-500">נותרו היום</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-purple-600">
+                {stats.anti_spam.groups_posted_this_week}
+              </div>
+              <div className="text-sm text-gray-500">קבוצות השבוע</div>
+            </div>
+            <div className="text-center">
+              <div className={`text-2xl font-bold ${stats.anti_spam.can_post_now ? 'text-green-600' : 'text-red-600'}`}>
+                {stats.anti_spam.can_post_now ? '✅' : '⛔'}
+              </div>
+              <div className="text-sm text-gray-500">
+                {stats.anti_spam.can_post_now ? 'מותר לפרסם' : 'מחוץ לשעות'}
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 text-sm text-gray-500 text-center">
+            🕐 שעות פרסום: {stats.anti_spam.posting_hours} | 
+            ⏱️ השהייה: {Math.floor(stats.anti_spam.min_delay_seconds/60)}-{Math.floor(stats.anti_spam.max_delay_seconds/60)} דקות בין פוסטים
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1156,16 +1206,23 @@ export default function FacebookMarketingPage() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [statsRes, groupsRes, campaignsRes, postsRes, repliesRes, modelsRes] = await Promise.all([
+      const [statsRes, groupsRes, campaignsRes, postsRes, repliesRes, modelsRes, antiSpamRes] = await Promise.all([
         fetch(`${API_BASE}/stats`),
         fetch(`${API_BASE}/groups`),
         fetch(`${API_BASE}/campaigns`),
         fetch(`${API_BASE}/posts`),
         fetch(`${API_BASE}/replies`),
         fetch(`${API_BASE}/ai/models`),
+        fetch(`${API_BASE}/anti-spam/stats`),
       ]);
 
-      if (statsRes.ok) setStats(await statsRes.json());
+      let statsData = null;
+      if (statsRes.ok) statsData = await statsRes.json();
+      if (antiSpamRes.ok && statsData) {
+        statsData.anti_spam = await antiSpamRes.json();
+      }
+      if (statsData) setStats(statsData);
+      
       if (groupsRes.ok) setGroups(await groupsRes.json());
       if (campaignsRes.ok) setCampaigns(await campaignsRes.json());
       if (postsRes.ok) setPosts(await postsRes.json());

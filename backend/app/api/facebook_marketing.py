@@ -687,6 +687,40 @@ async def add_image_to_post(
     return post
 
 
+@router.get("/anti-spam/stats", tags=["Anti-Spam"])
+async def get_anti_spam_stats(
+    session: AsyncSession = Depends(get_async_session)
+):
+    """קבלת סטטיסטיקות Anti-Spam"""
+    from app.services.anti_spam_service import get_anti_spam_service
+    
+    anti_spam = get_anti_spam_service(session)
+    stats = await anti_spam.get_posting_stats()
+    return stats
+
+
+@router.get("/anti-spam/can-post", tags=["Anti-Spam"])
+async def check_can_post(
+    group_id: Optional[int] = None,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """בדיקה האם מותר לפרסם"""
+    from app.services.anti_spam_service import get_anti_spam_service
+    
+    anti_spam = get_anti_spam_service(session)
+    
+    if group_id:
+        can_post, reason = await anti_spam.can_post_to_group(group_id)
+    else:
+        can_post, reason = await anti_spam.can_post_now()
+    
+    return {
+        "can_post": can_post,
+        "reason": reason,
+        "group_id": group_id
+    }
+
+
 @router.get("/ai/models", tags=["AI"])
 async def get_available_models():
     """קבלת רשימת מודלים זמינים"""
