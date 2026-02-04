@@ -261,8 +261,8 @@ class ReplicateImageService:
         Returns:
             URL של התמונה, או None
         """
-        # הוספת סגנון ל-prompt
-        enhanced_prompt = f"{image_prompt}, {style}, high quality, 4k, professional photography"
+        # הוספת הדוגמן eyal וסגנון ל-prompt (פוסט אישי)
+        enhanced_prompt = f"A photo of eyal, {image_prompt}, {style}, high quality, 4k, professional photography"
         
         result = await self.generate_image(
             prompt=enhanced_prompt,
