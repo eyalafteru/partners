@@ -8,7 +8,7 @@ from typing import List
 from loguru import logger
 from sqlalchemy import select, and_
 
-from app.database import async_session_maker
+from app.database import get_async_session_context
 from app.models.facebook_marketing import (
     FacebookPost,
     FacebookReply,
@@ -30,7 +30,7 @@ async def sync_all_post_comments():
     סנכרון תגובות מכל הפוסטים שפורסמו
     """
     try:
-        async with async_session_maker() as session:
+        async with get_async_session_context() as session:
             # מציאת פוסטים שפורסמו בשבוע האחרון
             week_ago = datetime.utcnow() - timedelta(days=7)
             
@@ -74,7 +74,7 @@ async def generate_pending_responses():
     יצירת תשובות AI לתגובות חדשות
     """
     try:
-        async with async_session_maker() as session:
+        async with get_async_session_context() as session:
             # מציאת תגובות שצריכות תשובה
             result = await session.execute(
                 select(FacebookReply).where(
@@ -108,7 +108,7 @@ async def check_scheduled_posts():
     בדיקת פוסטים מתוזמנים לפרסום
     """
     try:
-        async with async_session_maker() as session:
+        async with get_async_session_context() as session:
             # מציאת פוסטים מאושרים שמחכים לפרסום
             result = await session.execute(
                 select(FacebookPost).where(
