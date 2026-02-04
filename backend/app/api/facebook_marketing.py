@@ -595,12 +595,18 @@ async def regenerate_post(
     return post
 
 
+class ImageGenerationRequest(BaseModel):
+    style: str = "eyal"  # "eyal" = עם אייל, "generic" = גנרית
+    regenerate: bool = False  # האם לייצר מחדש
+
+
 @router.post("/posts/{post_id}/add-image", response_model=PostResponse, tags=["Posts"])
 async def add_image_to_post(
     post_id: int,
+    data: ImageGenerationRequest = ImageGenerationRequest(),
     session: AsyncSession = Depends(get_async_session)
 ):
-    """הוספת תמונה לפוסט"""
+    """הוספת/ייצור מחדש של תמונה לפוסט"""
     from app.services.post_generator_service import get_post_generator_service
     from app.services.replicate_service import get_replicate_service
     
@@ -612,11 +618,12 @@ async def add_image_to_post(
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     
-    # Generate image prompt
+    # Generate dynamic image prompt
     generator = get_post_generator_service()
-    image_prompt = await generator.generate_image_prompt(
+    image_prompt = await generator.generate_viral_image_prompt(
         post_content=post.content,
-        topic="מחשבונים פיננסיים"
+        style=data.style,  # "eyal" or "generic"
+        previous_prompt=post.image_prompt if data.regenerate else None
     )
     
     if not image_prompt:
@@ -624,7 +631,10 @@ async def add_image_to_post(
     
     # Generate image
     replicate_service = get_replicate_service()
-    image_url = await replicate_service.generate_post_image(image_prompt)
+    image_url = await replicate_service.generate_post_image(
+        image_prompt=image_prompt,
+        use_lora=(data.style == "eyal")  # Use LoRA only for eyal style
+    )
     
     if not image_url:
         raise HTTPException(status_code=500, detail="Failed to generate image")

@@ -52,31 +52,53 @@ POST_VARIATION_PROMPT = """אתה כותב פוסט אישי עבור אייל �
 
 החזר רק את טקסט הפוסט, ללא הסברים."""
 
-# Prompt ליצירת prompt לתמונה - תמונה אישית של אייל
-IMAGE_PROMPT_GENERATOR = """Create an image generation prompt for FLUX AI model with LoRA "eyal".
-
-IMPORTANT: The image must feature "eyal" - a professional Israeli businessman in his 40s.
-
-Context: This is for a personal Facebook post by Eyal Ovadia, offering FREE financial calculators for website owners.
+# Prompt ליצירת prompt לתמונה - דינמי וויראלי
+VIRAL_IMAGE_PROMPT_EYAL = """Create a VIRAL, eye-catching image prompt for FLUX AI model featuring "eyal".
 
 Facebook Post (in Hebrew):
 {post_content}
 
-Topic: {topic}
+Previous prompt to AVOID (create something DIFFERENT):
+{previous_prompt}
 
-Requirements for the image:
-1. Write the prompt in English only
-2. MUST START WITH: "A photo of eyal,"
-3. Show eyal in a professional setting related to the post content
-4. Ideas: eyal at desk with laptop showing calculator, eyal presenting financial data, eyal in modern office, eyal pointing at screen with charts
-5. Style: Professional, approachable, trustworthy
-6. Lighting: Bright, natural, optimistic
-7. NO text, words, or numbers visible
-8. NO logos or brand names
-9. Setting: Modern office, home office, or tech environment
-10. End with: "4k quality, professional marketing photo, clean composition"
+Create a unique, scroll-stopping image that will make people stop and look!
 
-Format: Single paragraph, 50-80 words. MUST start with "A photo of eyal,".
+Requirements:
+1. MUST START WITH: "A photo of eyal,"
+2. eyal is a professional Israeli businessman in his 40s
+3. Make it VIRAL - dramatic angles, interesting compositions, unexpected settings
+4. Ideas vary: eyal celebrating success, eyal working late with dramatic lighting, eyal in front of big screen with graphs, eyal in startup environment, eyal giving thumbs up, eyal with excited expression
+5. Vary the settings: modern office, rooftop, conference room, home office, co-working space
+6. Vary lighting: golden hour, dramatic shadows, bright natural, neon accents
+7. Emotions: confident, excited, successful, approachable
+8. NO text, words, or logos
+9. End with: "4k quality, viral social media photo, professional"
+
+Be CREATIVE and DIFFERENT from the previous prompt! Format: 50-80 words.
+
+Return ONLY the image prompt."""
+
+VIRAL_IMAGE_PROMPT_GENERIC = """Create a VIRAL, eye-catching image prompt for FLUX AI model.
+
+Facebook Post (in Hebrew):
+{post_content}
+
+Previous prompt to AVOID (create something DIFFERENT):
+{previous_prompt}
+
+Create a unique, scroll-stopping image about financial tools and website success!
+
+Requirements:
+1. NO people's faces - use abstract concepts, objects, or silhouettes
+2. Make it VIRAL - dramatic, colorful, eye-catching
+3. Ideas: laptop with glowing calculator on screen, money and charts floating, digital transformation concept, success graphs going up, modern tech devices with financial dashboards, coins and calculators artistic composition
+4. Style: Modern, sleek, tech-forward, inspiring
+5. Colors: Bold blues, greens, gold accents, gradients
+6. Lighting: Dramatic, futuristic, or bright optimistic
+7. NO text, words, or logos
+8. End with: "4k quality, viral social media graphic, professional"
+
+Be CREATIVE and DIFFERENT from the previous prompt! Format: 50-80 words.
 
 Return ONLY the image prompt."""
 
@@ -338,6 +360,52 @@ class PostGeneratorService:
         elif self.anthropic_api_key:
             return "claude-sonnet-4"
         return self.default_model
+    
+    async def generate_viral_image_prompt(
+        self,
+        post_content: str,
+        style: str = "eyal",
+        previous_prompt: str = None,
+        model: str = None
+    ) -> Optional[str]:
+        """
+        יצירת prompt וירלי ודינמי לתמונה
+        
+        Args:
+            post_content: תוכן הפוסט (עברית)
+            style: "eyal" לתמונה עם אייל, "generic" לתמונה גנרית
+            previous_prompt: פרומפט קודם להימנע ממנו
+            model: מודל AI לשימוש
+            
+        Returns:
+            prompt לתמונה (אנגלית), או None בשגיאה
+        """
+        # בחירת טמפלט לפי סגנון
+        if style == "eyal":
+            template = VIRAL_IMAGE_PROMPT_EYAL
+        else:
+            template = VIRAL_IMAGE_PROMPT_GENERIC
+        
+        prompt = template.format(
+            post_content=post_content,
+            previous_prompt=previous_prompt or "None - this is the first image"
+        )
+        
+        # בחירת מודל זמין
+        if model is None:
+            model = self._get_available_model()
+        
+        result = await self._call_ai(
+            prompt=prompt,
+            system_message="You are a viral social media image expert. Create unique, scroll-stopping image prompts that get engagement. Be creative and vary your outputs!",
+            model=model,
+            temperature=0.95  # Higher temperature for more creativity
+        )
+        
+        if result:
+            logger.info(f"🎨 ✅ Viral image prompt generated ({style})")
+        
+        return result
     
     async def generate_full_post(
         self,

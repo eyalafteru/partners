@@ -739,7 +739,7 @@ const PostsTab: React.FC<{
   onPublish: (id: number) => void;
   onUpdate: (id: number, content: string) => void;
   onRegenerate: (id: number, model?: string) => void;
-  onAddImage: (id: number) => void;
+  onAddImage: (id: number, style: 'eyal' | 'generic', regenerate: boolean) => void;
   availableModels: { id: string; name: string }[];
 }> = ({ posts, groups, onApprove, onReject, onPublish, onUpdate, onRegenerate, onAddImage, availableModels }) => {
   const [filter, setFilter] = useState<string>('all');
@@ -809,19 +809,12 @@ const PostsTab: React.FC<{
                     >
                       🔄 ייצר מחדש
                     </button>
-                    {!post.has_image && (
-                      <button
-                        onClick={async () => {
-                          setAddingImageId(post.id);
-                          await onAddImage(post.id);
-                          setAddingImageId(null);
-                        }}
-                        disabled={addingImageId === post.id}
-                        className="px-3 py-1 bg-orange-500 text-white text-sm rounded hover:bg-orange-600 disabled:opacity-50"
-                      >
-                        {addingImageId === post.id ? '⏳...' : '🖼️ הוסף תמונה'}
-                      </button>
-                    )}
+                    <button
+                      onClick={() => setAddingImageId(addingImageId === post.id ? null : post.id)}
+                      className="px-3 py-1 bg-orange-500 text-white text-sm rounded hover:bg-orange-600"
+                    >
+                      🖼️ {post.has_image ? 'החלף תמונה' : 'הוסף תמונה'}
+                    </button>
                   </>
                 )}
                 {post.status === 'approved' && (
@@ -865,6 +858,38 @@ const PostsTab: React.FC<{
                     >
                       ✕
                     </button>
+                  </div>
+                </div>
+              )}
+              
+              {/* Image Generation Modal */}
+              {addingImageId === post.id && (
+                <div className="mt-2 p-3 bg-orange-50 rounded border border-orange-200">
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium">סוג תמונה:</label>
+                      <button
+                        onClick={() => onAddImage(post.id, 'eyal', post.has_image)}
+                        className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                      >
+                        👤 תמונה של אייל
+                      </button>
+                      <button
+                        onClick={() => onAddImage(post.id, 'generic', post.has_image)}
+                        className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
+                      >
+                        🎨 תמונה גנרית
+                      </button>
+                      <button
+                        onClick={() => setAddingImageId(null)}
+                        className="px-2 py-1 text-gray-500 text-sm hover:text-gray-700"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      {post.has_image ? '⚡ יחליף את התמונה הקיימת' : '✨ ייצר תמונה חדשה וייחודית'}
+                    </p>
                   </div>
                 </div>
               )}
@@ -1257,10 +1282,12 @@ export default function FacebookMarketingPage() {
     }
   };
 
-  const addImageToPost = async (postId: number) => {
+  const addImageToPost = async (postId: number, style: 'eyal' | 'generic' = 'eyal', regenerate: boolean = false) => {
     try {
       const res = await fetch(`${API_BASE}/posts/${postId}/add-image`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ style, regenerate }),
       });
       if (res.ok) {
         const updatedPost = await res.json();

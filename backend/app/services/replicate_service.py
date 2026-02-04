@@ -249,28 +249,36 @@ class ReplicateImageService:
     async def generate_post_image(
         self,
         image_prompt: str,
+        use_lora: bool = True,
         style: str = "professional marketing"
     ) -> Optional[str]:
         """
         יצירת תמונה לפוסט פייסבוק
         
         Args:
-            image_prompt: תיאור התמונה (מ-GPT/Claude)
+            image_prompt: תיאור התמונה (מ-AI)
+            use_lora: האם להשתמש במודל LoRA של אייל
             style: סגנון התמונה
             
         Returns:
             URL של התמונה, או None
         """
-        # הוספת הדוגמן eyal וסגנון ל-prompt (פוסט אישי)
-        enhanced_prompt = f"A photo of eyal, {image_prompt}, {style}, high quality, 4k, professional photography"
+        # הוספת סגנון ל-prompt
+        enhanced_prompt = f"{image_prompt}, {style}, high quality, 4k"
         
-        result = await self.generate_image(
-            prompt=enhanced_prompt,
-            aspect_ratio="16:9",  # מתאים לפייסבוק
-            wait_for_result=True,
-            num_outputs=1,
-            hf_lora="eyalafteru/eyalai"  # Custom LoRA model
-        )
+        # הגדרות לפי סוג התמונה
+        kwargs = {
+            "prompt": enhanced_prompt,
+            "aspect_ratio": "16:9",  # מתאים לפייסבוק
+            "wait_for_result": True,
+            "num_outputs": 1
+        }
+        
+        # הוספת LoRA רק אם נדרש (תמונה של אייל)
+        if use_lora:
+            kwargs["hf_lora"] = "eyalafteru/eyalai"
+        
+        result = await self.generate_image(**kwargs)
         
         if result and result.get("status") == "succeeded":
             return result.get("image_url")
