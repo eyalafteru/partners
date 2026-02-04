@@ -269,7 +269,7 @@ class ReplicateImageService:
             aspect_ratio="16:9",  # מתאים לפייסבוק
             wait_for_result=True,
             num_outputs=1,
-            hf_lora="eyalafteru/eyalnew"  # Custom LoRA model
+            hf_lora="eyalafteru/eyalai"  # Custom LoRA model
         )
         
         if result and result.get("status") == "succeeded":
