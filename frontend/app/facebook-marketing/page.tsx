@@ -734,23 +734,27 @@ const CampaignsTab: React.FC<{
 const PostsTab: React.FC<{
   posts: Post[];
   groups: Group[];
+  campaigns: Campaign[];
   onApprove: (id: number) => void;
-  onReject: (id: number, reason?: string) => void;
+  onReject: (id: number) => Promise<{ group_id: number; campaign_id: number | null } | null>;
   onPublish: (id: number) => void;
   onUpdate: (id: number, content: string) => void;
   onRegenerate: (id: number, model?: string) => void;
   onAddImage: (id: number, style: 'eyal' | 'generic', regenerate: boolean) => void;
+  onRegenerateForGroup: (campaignId: number, groupId: number) => void;
   availableModels: { id: string; name: string }[];
-}> = ({ posts, groups, onApprove, onReject, onPublish, onUpdate, onRegenerate, onAddImage, availableModels }) => {
+}> = ({ posts, groups, campaigns, onApprove, onReject, onPublish, onUpdate, onRegenerate, onAddImage, onRegenerateForGroup, availableModels }) => {
   const [filter, setFilter] = useState<string>('all');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editContent, setEditContent] = useState('');
   const [regeneratingId, setRegeneratingId] = useState<number | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [addingImageId, setAddingImageId] = useState<number | null>(null);
+  const [deletedPost, setDeletedPost] = useState<{ groupId: number; campaignId: number; groupName: string; campaignName: string } | null>(null);
 
   const filteredPosts = posts.filter((p) => filter === 'all' || p.status === filter);
   const groupsMap = Object.fromEntries(groups.map((g) => [g.id, g.name]));
+  const campaignsMap = Object.fromEntries(campaigns.map((c) => [c.id, c.name]));
 
   return (
     <div className="space-y-6">
@@ -774,9 +778,14 @@ const PostsTab: React.FC<{
         {filteredPosts.map((post) => (
           <div key={post.id} className="bg-white p-4 rounded-lg shadow">
             <div className="flex justify-between items-start mb-2">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <StatusBadge status={post.status} />
-                <span className="text-sm text-gray-500">{groupsMap[post.group_id] || 'קבוצה לא ידועה'}</span>
+                {post.campaign_id && (
+                  <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+                    📁 {campaignsMap[post.campaign_id] || 'קמפיין'}
+                  </span>
+                )}
+                <span className="text-sm text-gray-500">👥 {groupsMap[post.group_id] || 'קבוצה לא ידועה'}</span>
                 {post.has_image && <span className="text-sm">🖼️</span>}
               </div>
               <div className="flex gap-2 flex-wrap">
@@ -789,10 +798,20 @@ const PostsTab: React.FC<{
                       ✓ אשר
                     </button>
                     <button
-                      onClick={() => onReject(post.id)}
+                      onClick={async () => {
+                        const result = await onReject(post.id);
+                        if (result && result.campaign_id) {
+                          setDeletedPost({
+                            groupId: result.group_id,
+                            campaignId: result.campaign_id,
+                            groupName: groupsMap[result.group_id] || 'קבוצה',
+                            campaignName: campaignsMap[result.campaign_id] || 'קמפיין'
+                          });
+                        }
+                      }}
                       className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
                     >
-                      ✗ דחה
+                      ✗ דחה ומחק
                     </button>
                     <button
                       onClick={() => {
@@ -942,6 +961,36 @@ const PostsTab: React.FC<{
           </div>
         )}
       </div>
+
+      {/* Modal לייצור פוסט חדש אחרי מחיקה */}
+      {deletedPost && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg shadow-xl max-w-md">
+            <h3 className="text-lg font-bold mb-4">🗑️ הפוסט נמחק</h3>
+            <p className="text-gray-600 mb-4">
+              הפוסט לקבוצה <strong>{deletedPost.groupName}</strong> בקמפיין <strong>{deletedPost.campaignName}</strong> נמחק.
+            </p>
+            <p className="text-sm text-gray-500 mb-4">האם לייצר פוסט חדש לקבוצה זו?</p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setDeletedPost(null)}
+                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
+              >
+                לא, תודה
+              </button>
+              <button
+                onClick={() => {
+                  onRegenerateForGroup(deletedPost.campaignId, deletedPost.groupId);
+                  setDeletedPost(null);
+                }}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                ✨ ייצר פוסט חדש
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1227,13 +1276,31 @@ export default function FacebookMarketingPage() {
     }
   };
 
-  const rejectPost = async (postId: number, reason?: string) => {
+  const rejectPost = async (postId: number): Promise<{ group_id: number; campaign_id: number | null } | null> => {
     try {
-      const res = await fetch(`${API_BASE}/posts/${postId}/reject?reason=${reason || ''}`, {
+      const res = await fetch(`${API_BASE}/posts/${postId}/reject`, {
         method: 'POST',
       });
       if (res.ok) {
-        setPosts(posts.map((p) => (p.id === postId ? { ...p, status: 'rejected' } : p)));
+        const data = await res.json();
+        // הסר את הפוסט מהרשימה (נמחק)
+        setPosts(posts.filter((p) => p.id !== postId));
+        return { group_id: data.group_id, campaign_id: data.campaign_id };
+      }
+    } catch (err) {
+      console.error(err);
+    }
+    return null;
+  };
+
+  const regenerateForGroup = async (campaignId: number, groupId: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/posts/regenerate-for-group?campaign_id=${campaignId}&group_id=${groupId}`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const newPost = await res.json();
+        setPosts([newPost, ...posts]);
       }
     } catch (err) {
       console.error(err);
@@ -1388,12 +1455,14 @@ export default function FacebookMarketingPage() {
           <PostsTab
             posts={posts}
             groups={groups}
+            campaigns={campaigns}
             onApprove={approvePost}
             onReject={rejectPost}
             onPublish={publishPost}
             onUpdate={updatePost}
             onRegenerate={regeneratePost}
             onAddImage={addImageToPost}
+            onRegenerateForGroup={regenerateForGroup}
             availableModels={availableModels}
           />
         )}

@@ -514,16 +514,55 @@ async def approve_post(
     await session.commit()
     return post
 
-@router.post("/posts/{post_id}/reject", response_model=PostResponse, tags=["Posts"])
+@router.post("/posts/{post_id}/reject", tags=["Posts"])
 async def reject_post(
     post_id: int,
     reason: Optional[str] = None,
     session: AsyncSession = Depends(get_async_session)
 ):
-    """דחיית פוסט"""
-    service = get_facebook_marketing_service(session)
-    post = await service.reject_post(post_id, reason)
+    """דחיית ומחיקת פוסט - מחזיר את פרטי הקבוצה והקמפיין לייצור מחדש"""
+    # Get post info before deleting
+    result = await session.execute(
+        select(FacebookPost).where(FacebookPost.id == post_id)
+    )
+    post = result.scalar_one_or_none()
+    
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    # Save info for response
+    group_id = post.group_id
+    campaign_id = post.campaign_id
+    
+    # Delete the post
+    await session.delete(post)
     await session.commit()
+    
+    return {
+        "message": "Post deleted",
+        "group_id": group_id,
+        "campaign_id": campaign_id,
+        "can_regenerate": campaign_id is not None
+    }
+
+
+@router.post("/posts/regenerate-for-group", response_model=PostResponse, tags=["Posts"])
+async def regenerate_post_for_group(
+    campaign_id: int,
+    group_id: int,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """יצירת פוסט חדש לקבוצה בקמפיין"""
+    service = get_facebook_marketing_service(session)
+    
+    # Generate new post for this group
+    post = await service.generate_single_post(campaign_id, group_id)
+    
+    if not post:
+        raise HTTPException(status_code=500, detail="Failed to generate post")
+    
+    await session.commit()
+    await session.refresh(post)
     return post
 
 @router.post("/posts/{post_id}/publish", response_model=PostResponse, tags=["Posts"])

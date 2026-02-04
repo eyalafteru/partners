@@ -220,6 +220,90 @@ class FacebookMarketingService:
         logger.info(f"📝 ✅ Generated {len(posts)} posts for campaign: {campaign.name}")
         return posts
     
+    async def generate_single_post(self, campaign_id: int, group_id: int) -> Optional[FacebookPost]:
+        """יצירת פוסט בודד לקבוצה בקמפיין"""
+        campaign = await self.get_campaign(campaign_id)
+        if not campaign:
+            raise ValueError(f"Campaign {campaign_id} not found")
+        
+        # קבלת הקבוצה
+        group_result = await self.session.execute(
+            select(FacebookGroup).where(FacebookGroup.id == group_id)
+        )
+        group = group_result.scalar_one_or_none()
+        if not group:
+            raise ValueError(f"Group {group_id} not found")
+        
+        # קבלת תבנית אם יש
+        base_template = ""
+        if campaign.template_id:
+            template_result = await self.session.execute(
+                select(FacebookPostTemplate).where(
+                    FacebookPostTemplate.id == campaign.template_id
+                )
+            )
+            template = template_result.scalar_one_or_none()
+            if template:
+                base_template = template.base_content
+        
+        # קבלת פוסטים קודמים לקבוצה זו (להימנע מחזרות)
+        prev_posts_result = await self.session.execute(
+            select(FacebookPost.content).where(
+                FacebookPost.group_id == group_id,
+                FacebookPost.campaign_id == campaign_id
+            ).limit(5)
+        )
+        previous_posts = [p[0] for p in prev_posts_result.fetchall() if p[0]]
+        
+        # יצירת הפוסט
+        content = await self.post_generator.generate_post_variation(
+            topic=campaign.topic,
+            group_name=group.name,
+            target_audience=campaign.target_audience or "",
+            base_template=base_template,
+            previous_posts=previous_posts
+        )
+        
+        if not content:
+            return None
+        
+        # בדיקה אם צריך תמונה
+        has_image = False
+        image_prompt = None
+        image_url = None
+        
+        if campaign.image_percentage > 0:
+            import random
+            if random.randint(1, 100) <= campaign.image_percentage:
+                has_image = True
+                # יצירת תמונה
+                image_prompt = await self.post_generator.generate_viral_image_prompt(
+                    post_content=content,
+                    style="eyal"
+                )
+                if image_prompt:
+                    from app.services.replicate_service import get_replicate_service
+                    replicate = get_replicate_service()
+                    image_url = await replicate.generate_post_image(image_prompt, use_lora=True)
+        
+        # יצירת הפוסט ב-DB
+        post = FacebookPost(
+            campaign_id=campaign.id,
+            group_id=group_id,
+            content=content,
+            has_image=has_image,
+            image_prompt=image_prompt,
+            image_url=image_url,
+            status="pending_approval"
+        )
+        self.session.add(post)
+        
+        # עדכון מונה קמפיין
+        campaign.total_posts_generated += 1
+        
+        logger.info(f"📝 ✅ Generated single post for group: {group.name}")
+        return post
+    
     # ========== Posts Management ==========
     
     async def get_pending_posts(self, campaign_id: int = None) -> List[FacebookPost]:
