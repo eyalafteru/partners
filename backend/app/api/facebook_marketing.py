@@ -128,6 +128,21 @@ class SearchGroupsRequest(BaseModel):
     max_groups: int = 20
     category: Optional[str] = None
 
+class BulkGroupItem(BaseModel):
+    id: str  # fb_group_id
+    name: str
+    url: Optional[str] = None
+
+class BulkImportRequest(BaseModel):
+    groups: List[BulkGroupItem]
+    category: Optional[str] = None
+
+class BulkImportResponse(BaseModel):
+    imported: int
+    skipped: int
+    total: int
+    message: str
+
 class TemplateCreate(BaseModel):
     name: str
     base_content: str
@@ -180,6 +195,56 @@ async def create_group(
     group = await service.add_group(**data.model_dump())
     await session.commit()
     return group
+
+@router.post("/groups/bulk-import", response_model=BulkImportResponse, tags=["Groups"])
+async def bulk_import_groups(
+    data: BulkImportRequest,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    יבוא מאסיבי של קבוצות מפייסבוק.
+    מנקה אוטומטית את השמות מ-"Last active..." 
+    """
+    import re
+    
+    imported = 0
+    skipped = 0
+    
+    for group_item in data.groups:
+        # ניקוי שם הקבוצה מ-"Last active..."
+        clean_name = re.sub(r'Last active.*$', '', group_item.name).strip()
+        if not clean_name:
+            clean_name = f"Group {group_item.id}"
+        
+        # בדיקה אם הקבוצה כבר קיימת
+        result = await session.execute(
+            select(FacebookGroup).where(FacebookGroup.fb_group_id == group_item.id)
+        )
+        existing = result.scalar_one_or_none()
+        
+        if existing:
+            skipped += 1
+            continue
+        
+        # יצירת קבוצה חדשה
+        new_group = FacebookGroup(
+            fb_group_id=group_item.id,
+            name=clean_name,
+            url=group_item.url or f"https://www.facebook.com/groups/{group_item.id}",
+            category=data.category,
+            is_active=True
+        )
+        session.add(new_group)
+        imported += 1
+    
+    await session.commit()
+    
+    return BulkImportResponse(
+        imported=imported,
+        skipped=skipped,
+        total=len(data.groups),
+        message=f"יובאו {imported} קבוצות חדשות, {skipped} קבוצות כבר היו קיימות"
+    )
 
 @router.put("/groups/{group_id}", response_model=GroupResponse, tags=["Groups"])
 async def update_group(
