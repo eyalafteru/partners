@@ -11,31 +11,36 @@ from app.config import settings
 from app.services.replicate_service import get_replicate_service
 
 
-# Prompt ליצירת וריאציה של פוסט
-POST_VARIATION_PROMPT = """אתה מומחה שיווק דיגיטלי שכותב פוסטים לקבוצות פייסבוק של בעלי אתרים ועסקים.
+# Prompt ליצירת וריאציה של פוסט - פוסט אישי מאייל עובדיה
+POST_VARIATION_PROMPT = """אתה כותב פוסט אישי עבור אייל עובדיה לפייסבוק.
 
-🎯 המטרה: לגרום לבעלי אתרים להיכנס לאתר שלנו, לבחור מחשבון פיננסי חינמי ולהטמיע אותו באתר שלהם.
+👤 מי אני (אייל עובדיה):
+- יזם ומייסד Afteru Group (סוכנות שיווק דיגיטלי מאז 2008)
+- חוקר AI ובונה מערכות אוטומציה
+- 20+ שנות ניסיון בעסקים, שיווק דיגיטלי וטכנולוגיה
+- אב ל-4 ילדים, תושב להבים
+- מנהל את האתר loan-israel.co.il - פורטל פיננסי עם מחשבונים חכמים
 
-📌 מה אנחנו מציעים:
-- מחשבונים פיננסיים חכמים (הלוואות, משכנתאות, חסכון, פנסיה ועוד)
-- הטמעה בחינם לחלוטין
+🎯 מה אני רוצה להציע בפוסט:
+- מחשבונים פיננסיים חכמים להטמעה בחינם באתרים
+- הלוואות, משכנתאות, חסכון, פנסיה ועוד
 - קוד פשוט להעתקה והדבקה
 - התאמת צבעים לעיצוב האתר בלחיצת כפתור
-- ערך אמיתי לגולשים של האתר
+- ערך אמיתי לגולשים
 
 שם הקבוצה: {group_name}
 קהל יעד: {target_audience}
 תבנית בסיס (אם יש): {base_template}
 
 דרישות לפוסט:
-1. כתוב בעברית, בטון ידידותי ומקצועי
-2. אורך: 4-7 שורות
-3. הדגש שזה בחינם וקל להטמעה
-4. הסבר את הערך לבעל האתר ולגולשים שלו
-5. כלול קריאה לפעולה - להיכנס לאתר ולבחור מחשבון
-6. השתמש ב-2-3 אימוג'ים רלוונטיים (לא יותר מדי)
-7. אל תהיה "מכירתי" מדי - תן ערך אמיתי
-8. התאם לסוג הקבוצה (עסקים, שיווק, אתרים, נדל"ן וכו')
+1. כתוב בגוף ראשון - "אני", "שלי", "פיתחתי"
+2. טון אישי, ידידותי, לא מכירתי
+3. אורך: 4-7 שורות
+4. הדגש שזה בחינם ומתוך רצון לעזור
+5. הזכר את הניסיון שלי או את הרקע שלי בצורה טבעית
+6. כלול קריאה לפעולה - להיכנס לאתר ולבחור מחשבון
+7. השתמש ב-2-3 אימוג'ים רלוונטיים (לא יותר מדי)
+8. התאם לסוג הקבוצה (עסקים, שיווק, אתרים, נדל"ן, AI וכו')
 
 פוסטים קודמים (להימנע מחזרות):
 {previous_posts}
@@ -47,10 +52,12 @@ POST_VARIATION_PROMPT = """אתה מומחה שיווק דיגיטלי שכות�
 
 החזר רק את טקסט הפוסט, ללא הסברים."""
 
-# Prompt ליצירת prompt לתמונה
-IMAGE_PROMPT_GENERATOR = """Create an image generation prompt for FLUX AI model.
+# Prompt ליצירת prompt לתמונה - תמונה אישית של אייל
+IMAGE_PROMPT_GENERATOR = """Create an image generation prompt for FLUX AI model with LoRA "eyal".
 
-Context: This is for a Facebook post offering FREE financial calculators that website owners can embed on their sites. The calculators help visitors make financial decisions (loans, mortgages, savings, etc.)
+IMPORTANT: The image must feature "eyal" - a professional Israeli businessman in his 40s.
+
+Context: This is for a personal Facebook post by Eyal Ovadia, offering FREE financial calculators for website owners.
 
 Facebook Post (in Hebrew):
 {post_content}
@@ -59,16 +66,17 @@ Topic: {topic}
 
 Requirements for the image:
 1. Write the prompt in English only
-2. Show a professional business/tech scene relevant to websites and finance
-3. Ideas: laptop with calculator on screen, business person looking at financial charts, modern office with digital tools, website mockup with calculator widget
-4. Style: Clean, modern, professional, corporate
-5. Lighting: Bright, optimistic
-6. NO text, words, or numbers visible
-7. NO logos or brand names
-8. Colors: Blues, greens (trust colors), white backgrounds
-9. End with: "4k quality, professional marketing photo, clean composition"
+2. MUST START WITH: "A photo of eyal,"
+3. Show eyal in a professional setting related to the post content
+4. Ideas: eyal at desk with laptop showing calculator, eyal presenting financial data, eyal in modern office, eyal pointing at screen with charts
+5. Style: Professional, approachable, trustworthy
+6. Lighting: Bright, natural, optimistic
+7. NO text, words, or numbers visible
+8. NO logos or brand names
+9. Setting: Modern office, home office, or tech environment
+10. End with: "4k quality, professional marketing photo, clean composition"
 
-Format: Single paragraph, 50-80 words.
+Format: Single paragraph, 50-80 words. MUST start with "A photo of eyal,".
 
 Return ONLY the image prompt."""
 
@@ -275,7 +283,7 @@ class PostGeneratorService:
         
         result = await self._call_ai(
             prompt=prompt,
-            system_message="אתה מומחה שיווק דיגיטלי לעסקים B2B. אתה כותב פוסטים לקבוצות פייסבוק של בעלי אתרים, יזמים ומשווקים. המטרה שלך היא לגרום להם להטמיע מחשבונים פיננסיים חינמיים באתר שלהם. אתה כותב בעברית, בטון מקצועי אבל נגיש.",
+            system_message="אתה כותב פוסטים אישיים עבור אייל עובדיה - יזם, מייסד Afteru Group וחוקר AI עם 20+ שנות ניסיון. הפוסטים נכתבים בגוף ראשון, בטון אישי וידידותי, ומציעים מחשבונים פיננסיים להטמעה בחינם. אתה כותב בעברית.",
             model=model,
             temperature=0.85
         )
