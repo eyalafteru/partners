@@ -78,6 +78,8 @@ services:
     image: mariadb:10.11
     container_name: partnercalc-mariadb
     restart: unless-stopped
+    ports:
+      - "3306:3306"  # Exposed for remote development
     environment:
       - MYSQL_ROOT_PASSWORD=root_password_change_me
       - MYSQL_DATABASE=partnercalc
