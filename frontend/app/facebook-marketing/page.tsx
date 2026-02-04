@@ -57,6 +57,7 @@ interface Reply {
   suggested_response: string | null;
   suggested_channel: string | null;
   actual_response: string | null;
+  response_channel: string | null;
   received_at: string | null;
   created_at: string;
 }
