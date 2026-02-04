@@ -24,6 +24,7 @@ interface Campaign {
   target_audience: string | null;
   status: string;
   image_percentage: number;
+  target_group_ids: number[];
   total_posts_generated: number;
   total_posts_approved: number;
   total_posts_published: number;
@@ -355,12 +356,20 @@ const CampaignsTab: React.FC<{
     topic: '',
     target_audience: '',
     image_percentage: 50,
+    target_group_ids: [] as number[],
   });
+  const [editGroupSearch, setEditGroupSearch] = useState('');
 
   // Filter groups by search
   const filteredGroups = groups.filter(g => 
     g.name.toLowerCase().includes(groupSearch.toLowerCase()) ||
     g.fb_group_id.includes(groupSearch)
+  );
+
+  // Filter groups for edit modal
+  const filteredEditGroups = groups.filter(g => 
+    g.name.toLowerCase().includes(editGroupSearch.toLowerCase()) ||
+    g.fb_group_id.includes(editGroupSearch)
   );
 
   const startEdit = (campaign: Campaign) => {
@@ -370,7 +379,9 @@ const CampaignsTab: React.FC<{
       topic: campaign.topic,
       target_audience: campaign.target_audience || '',
       image_percentage: campaign.image_percentage,
+      target_group_ids: campaign.target_group_ids || [],
     });
+    setEditGroupSearch('');
   };
 
   const handleEditSubmit = (e: React.FormEvent) => {
@@ -508,50 +519,106 @@ const CampaignsTab: React.FC<{
       {/* Edit Campaign Modal */}
       {editingCampaign && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-lg">
+          <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <h3 className="font-bold text-lg mb-4">✏️ עריכת קמפיין: {editingCampaign.name}</h3>
             <form onSubmit={handleEditSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">שם הקמפיין</label>
+                  <input
+                    type="text"
+                    value={editFormData.name}
+                    onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                    className="w-full border rounded px-3 py-2"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">נושא</label>
+                  <input
+                    type="text"
+                    value={editFormData.topic}
+                    onChange={(e) => setEditFormData({ ...editFormData, topic: e.target.value })}
+                    className="w-full border rounded px-3 py-2"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">קהל יעד</label>
+                  <input
+                    type="text"
+                    value={editFormData.target_audience}
+                    onChange={(e) => setEditFormData({ ...editFormData, target_audience: e.target.value })}
+                    className="w-full border rounded px-3 py-2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">אחוז תמונות</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={editFormData.image_percentage}
+                    onChange={(e) => setEditFormData({ ...editFormData, image_percentage: parseInt(e.target.value) })}
+                    className="w-full border rounded px-3 py-2"
+                  />
+                </div>
+              </div>
+              
+              {/* Groups Selection */}
               <div>
-                <label className="block text-sm font-medium mb-1">שם הקמפיין</label>
+                <label className="block text-sm font-medium mb-1">
+                  📁 קבוצות יעד ({editFormData.target_group_ids.length} נבחרו מתוך {groups.length})
+                </label>
                 <input
                   type="text"
-                  value={editFormData.name}
-                  onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
-                  className="w-full border rounded px-3 py-2"
-                  required
+                  placeholder="🔍 חפש קבוצות..."
+                  value={editGroupSearch}
+                  onChange={(e) => setEditGroupSearch(e.target.value)}
+                  className="w-full border rounded px-3 py-2 mb-2"
                 />
+                <div className="flex gap-2 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditFormData({ ...editFormData, target_group_ids: filteredEditGroups.map(g => g.id) })}
+                    className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                  >
+                    בחר הכל ({filteredEditGroups.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditFormData({ ...editFormData, target_group_ids: [] })}
+                    className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+                  >
+                    נקה הכל
+                  </button>
+                </div>
+                <div className="border rounded p-2 max-h-60 overflow-y-auto bg-gray-50">
+                  {filteredEditGroups.map((group) => (
+                    <label key={group.id} className="flex items-center gap-2 p-1 hover:bg-white rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editFormData.target_group_ids.includes(group.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setEditFormData({ ...editFormData, target_group_ids: [...editFormData.target_group_ids, group.id] });
+                          } else {
+                            setEditFormData({ ...editFormData, target_group_ids: editFormData.target_group_ids.filter((id) => id !== group.id) });
+                          }
+                        }}
+                        className="rounded"
+                      />
+                      <span className="text-sm flex-1">{group.name}</span>
+                      <span className="text-xs text-gray-400">{group.member_count.toLocaleString()} חברים</span>
+                    </label>
+                  ))}
+                  {filteredEditGroups.length === 0 && (
+                    <div className="text-center text-gray-500 py-4">לא נמצאו קבוצות</div>
+                  )}
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">נושא</label>
-                <input
-                  type="text"
-                  value={editFormData.topic}
-                  onChange={(e) => setEditFormData({ ...editFormData, topic: e.target.value })}
-                  className="w-full border rounded px-3 py-2"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">קהל יעד</label>
-                <input
-                  type="text"
-                  value={editFormData.target_audience}
-                  onChange={(e) => setEditFormData({ ...editFormData, target_audience: e.target.value })}
-                  className="w-full border rounded px-3 py-2"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">אחוז תמונות</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={editFormData.image_percentage}
-                  onChange={(e) => setEditFormData({ ...editFormData, image_percentage: parseInt(e.target.value) })}
-                  className="w-full border rounded px-3 py-2"
-                />
-              </div>
-              <div className="flex gap-2">
+              
+              <div className="flex gap-2 pt-2 border-t">
                 <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
                   💾 שמור שינויים
                 </button>
@@ -609,7 +676,7 @@ const CampaignsTab: React.FC<{
             {/* Expanded Campaign Details */}
             {expandedCampaign === campaign.id && (
               <div className="border-t p-4 bg-gray-50">
-                <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
+                <div className="grid grid-cols-3 gap-4 mb-4 text-sm">
                   <div>
                     <span className="text-gray-500">קהל יעד:</span>
                     <span className="mr-2 font-medium">{campaign.target_audience || 'לא הוגדר'}</span>
@@ -622,6 +689,32 @@ const CampaignsTab: React.FC<{
                     <span className="text-gray-500">תאריך יצירה:</span>
                     <span className="mr-2 font-medium">{new Date(campaign.created_at).toLocaleDateString('he-IL')}</span>
                   </div>
+                </div>
+                
+                {/* Campaign Groups */}
+                <div className="mt-4">
+                  <h4 className="text-sm font-medium text-gray-700 mb-2">
+                    📁 קבוצות בקמפיין ({campaign.target_group_ids?.length || 0})
+                  </h4>
+                  {campaign.target_group_ids && campaign.target_group_ids.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {campaign.target_group_ids.slice(0, 10).map((groupId) => {
+                        const group = groups.find(g => g.id === groupId);
+                        return group ? (
+                          <span key={groupId} className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
+                            {group.name}
+                          </span>
+                        ) : null;
+                      })}
+                      {campaign.target_group_ids.length > 10 && (
+                        <span className="px-2 py-1 bg-gray-200 text-gray-600 rounded text-xs">
+                          +{campaign.target_group_ids.length - 10} נוספות
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-gray-400 text-sm">לא נבחרו קבוצות</span>
+                  )}
                 </div>
               </div>
             )}

@@ -73,6 +73,7 @@ class CampaignResponse(BaseModel):
     target_audience: Optional[str]
     status: str
     image_percentage: int
+    target_group_ids: List[int] = []
     total_posts_generated: int
     total_posts_approved: int
     total_posts_published: int
@@ -107,6 +108,7 @@ class CampaignUpdate(BaseModel):
     target_audience: Optional[str] = None
     image_percentage: Optional[int] = None
     status: Optional[str] = None
+    target_group_ids: Optional[List[int]] = None
 
 class ReplyResponse(BaseModel):
     id: int
