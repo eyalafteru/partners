@@ -72,7 +72,10 @@ interface Stats {
   };
 }
 
-const API_BASE = 'http://localhost:8000/api/facebook';
+// Use relative URL for production (nginx proxy) or localhost for development
+const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost' 
+  ? '/api/facebook' 
+  : 'http://localhost:8000/api/facebook';
 
 // Tab Component
 const TabButton: React.FC<{
