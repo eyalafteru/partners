@@ -269,6 +269,10 @@ class PostGeneratorService:
             additional_instructions=additional_instructions or "אין"
         )
         
+        # בחירת מודל זמין אם לא סופק
+        if model is None:
+            model = self._get_available_model()
+        
         result = await self._call_ai(
             prompt=prompt,
             system_message="אתה מומחה שיווק דיגיטלי לעסקים B2B. אתה כותב פוסטים לקבוצות פייסבוק של בעלי אתרים, יזמים ומשווקים. המטרה שלך היא לגרום להם להטמיע מחשבונים פיננסיים חינמיים באתר שלהם. אתה כותב בעברית, בטון מקצועי אבל נגיש.",
@@ -284,7 +288,8 @@ class PostGeneratorService:
     async def generate_image_prompt(
         self,
         post_content: str,
-        topic: str = ""
+        topic: str = "",
+        model: str = None
     ) -> Optional[str]:
         """
         יצירת prompt לתמונה על בסיס הפוסט
@@ -292,6 +297,7 @@ class PostGeneratorService:
         Args:
             post_content: תוכן הפוסט (עברית)
             topic: נושא הפוסט
+            model: מודל AI לשימוש (אופציונלי)
             
         Returns:
             prompt לתמונה (אנגלית), או None בשגיאה
@@ -301,9 +307,14 @@ class PostGeneratorService:
             topic=topic or "general marketing"
         )
         
-        result = await self._call_gpt(
+        # בחירת מודל זמין
+        if model is None:
+            model = self._get_available_model()
+        
+        result = await self._call_ai(
             prompt=prompt,
             system_message="You are an expert at creating image prompts for AI image generators.",
+            model=model,
             temperature=0.7
         )
         
@@ -311,6 +322,14 @@ class PostGeneratorService:
             logger.info(f"🎨 ✅ Image prompt generated")
         
         return result
+    
+    def _get_available_model(self) -> str:
+        """מחזיר מודל זמין - בודק איזה API key קיים"""
+        if self.openai_api_key:
+            return "gpt-4o-mini"
+        elif self.anthropic_api_key:
+            return "claude-sonnet-4"
+        return self.default_model
     
     async def generate_full_post(
         self,
