@@ -15,6 +15,15 @@ from app.models.email_template import EmailTemplate
 from app.models.reply_scenario import ReplyScenario
 from app.models.email_queue import EmailQueue
 from app.models.blacklist import Blacklist
+from app.models.facebook_marketing import (
+    FacebookGroup,
+    FacebookPostTemplate,
+    FacebookCampaign,
+    FacebookPost,
+    FacebookReply,
+    FacebookConversation,
+    FacebookMessage,
+)
 
 __all__ = [
     "Calculator",
@@ -33,4 +42,12 @@ __all__ = [
     "ReplyScenario",
     "EmailQueue",
     "Blacklist",
+    # Facebook Marketing
+    "FacebookGroup",
+    "FacebookPostTemplate",
+    "FacebookCampaign",
+    "FacebookPost",
+    "FacebookReply",
+    "FacebookConversation",
+    "FacebookMessage",
 ]

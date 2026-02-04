@@ -18,7 +18,7 @@ from app.config import settings
 from app.database import init_db, close_db
 
 # Import API routers
-from app.api import calculators, leads, scans, communication, prompts, stats, webhooks, templates, ai_reply, emails, tracking, outreach, blacklist, notifications
+from app.api import calculators, leads, scans, communication, prompts, stats, webhooks, templates, ai_reply, emails, tracking, outreach, blacklist, notifications, facebook_marketing
 from app.api.admin import database as admin_database, api_keys, auto_reply as admin_auto_reply, scenarios as admin_scenarios, business_classifier as admin_classifier
 
 
@@ -72,6 +72,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"🔄 Pipeline resume failed to start: {e}")
     
+    # Start Facebook Marketing tasks
+    facebook_task = None
+    try:
+        from app.tasks.facebook_tasks import start_facebook_tasks
+        facebook_task = asyncio.create_task(start_facebook_tasks())
+        logger.info("📘 Facebook Marketing tasks started")
+    except Exception as e:
+        logger.warning(f"📘 Facebook Marketing tasks failed to start: {e}")
+    
     yield
     
     # Shutdown
@@ -82,6 +91,8 @@ async def lifespan(app: FastAPI):
         email_sync_task.cancel()
     if email_scheduler_task:
         email_scheduler_task.cancel()
+    if facebook_task:
+        facebook_task.cancel()
     await close_db()
 
 
@@ -242,6 +253,13 @@ app.include_router(
 app.include_router(
     notifications.router,
     tags=["Notifications"]
+)
+
+# Facebook Marketing - פרסום בקבוצות פייסבוק
+app.include_router(
+    facebook_marketing.router,
+    prefix="/api/facebook",
+    tags=["Facebook Marketing"]
 )
 
 

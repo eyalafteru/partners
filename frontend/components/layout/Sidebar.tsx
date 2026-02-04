@@ -16,7 +16,8 @@ import {
   Mail,
   FileText,
   Zap,
-  Bell
+  Bell,
+  Facebook
 } from 'lucide-react'
 
 const navigation = [
@@ -25,6 +26,7 @@ const navigation = [
   { name: 'לידים ו-Outreach', href: '/leads', icon: Users },
   { name: 'סריקות', href: '/scans', icon: Search },
   { divider: true, name: 'תקשורת' },
+  { name: 'Facebook Marketing', href: '/facebook-marketing', icon: Facebook },
   { name: 'תבניות מייל', href: '/emails/templates', icon: FileText },
   { divider: true, name: 'ניהול' },
   { name: 'פרומפטים', href: '/admin/prompts', icon: Bot },

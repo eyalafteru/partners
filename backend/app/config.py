@@ -73,6 +73,19 @@ class Settings(BaseSettings):
     # ========== Scraping - Apify ==========
     apify_token: str = ""  # Set via APIFY_TOKEN env variable
     
+    # ========== Apify - Facebook Marketing Actors ==========
+    apify_fb_poster_actor: str = "bhansalisoft/facebook-group-auto-poster"
+    apify_fb_comments_actor: str = "apify/facebook-comments-scraper"
+    apify_fb_messenger_actor: str = "clothefobia/facebook-auto-message-sender"
+    apify_fb_groups_scraper: str = "memo23/facebook-search-groups-scraper"
+    
+    # ========== Facebook - Cookie for Apify Actors ==========
+    facebook_cookie: str = ""  # JSON cookie from browser extension
+    
+    # ========== Replicate - Image Generation ==========
+    replicate_api_token: str = ""  # Set via REPLICATE_API_TOKEN env variable
+    replicate_flux_version: str = "091495765fa5ef2725a175a57b276ec30dc9d39c22d30410f2ede68a3eab66b3"
+    
     # ========== Proxy ==========
     proxy_service_url: Optional[str] = None
     
