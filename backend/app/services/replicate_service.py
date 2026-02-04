@@ -255,7 +255,7 @@ class ReplicateImageService:
         יצירת תמונה לפוסט פייסבוק
         
         Args:
-            image_prompt: תיאור התמונה (מ-GPT)
+            image_prompt: תיאור התמונה (מ-GPT/Claude)
             style: סגנון התמונה
             
         Returns:
@@ -267,7 +267,9 @@ class ReplicateImageService:
         result = await self.generate_image(
             prompt=enhanced_prompt,
             aspect_ratio="16:9",  # מתאים לפייסבוק
-            wait_for_result=True
+            wait_for_result=True,
+            num_outputs=1,
+            hf_lora="eyalafteru/eyalnew"  # Custom LoRA model
         )
         
         if result and result.get("status") == "succeeded":
