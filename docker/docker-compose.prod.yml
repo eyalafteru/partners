@@ -15,7 +15,7 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
-      - certbot-webroot:/var/www/certbot:ro
+      - /var/www/certbot:/var/www/certbot:ro
     depends_on:
       - frontend
       - backend
@@ -167,8 +167,6 @@ volumes:
   redis-data:
     driver: local
   backend-data:
-    driver: local
-  certbot-webroot:
     driver: local
 
 # ========== Networks ==========
