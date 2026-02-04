@@ -12,51 +12,65 @@ from app.services.replicate_service import get_replicate_service
 
 
 # Prompt ליצירת וריאציה של פוסט
-POST_VARIATION_PROMPT = """אתה מומחה שיווק דיגיטלי בפייסבוק. צור פוסט מעניין וייחודי עבור קבוצת פייסבוק.
+POST_VARIATION_PROMPT = """אתה מומחה שיווק דיגיטלי שכותב פוסטים לקבוצות פייסבוק של בעלי אתרים ועסקים.
 
-נושא הפוסט: {topic}
+🎯 המטרה: לגרום לבעלי אתרים להיכנס לאתר שלנו, לבחור מחשבון פיננסי חינמי ולהטמיע אותו באתר שלהם.
+
+📌 מה אנחנו מציעים:
+- מחשבונים פיננסיים חכמים (הלוואות, משכנתאות, חסכון, פנסיה ועוד)
+- הטמעה בחינם לחלוטין
+- קוד פשוט להעתקה והדבקה
+- התאמת צבעים לעיצוב האתר בלחיצת כפתור
+- ערך אמיתי לגולשים של האתר
+
 שם הקבוצה: {group_name}
 קהל יעד: {target_audience}
 תבנית בסיס (אם יש): {base_template}
 
-דרישות:
-1. הפוסט חייב להיות בעברית
-2. אורך: 3-6 שורות (לא יותר מדי ארוך)
-3. כלול 2-4 אימוג'ים רלוונטיים
-4. צור קריאה לפעולה ברורה
-5. הפוסט צריך להיות שונה מפוסטים קודמים (ייחודי)
-6. אל תשתמש בביטויים גנריים מדי
-7. התאם את הטון לקהל היעד
+דרישות לפוסט:
+1. כתוב בעברית, בטון ידידותי ומקצועי
+2. אורך: 4-7 שורות
+3. הדגש שזה בחינם וקל להטמעה
+4. הסבר את הערך לבעל האתר ולגולשים שלו
+5. כלול קריאה לפעולה - להיכנס לאתר ולבחור מחשבון
+6. השתמש ב-2-3 אימוג'ים רלוונטיים (לא יותר מדי)
+7. אל תהיה "מכירתי" מדי - תן ערך אמיתי
+8. התאם לסוג הקבוצה (עסקים, שיווק, אתרים, נדל"ן וכו')
 
-פוסטים קודמים שנשלחו (להימנע מחזרות):
+פוסטים קודמים (להימנע מחזרות):
 {previous_posts}
 
 הנחיות נוספות:
 {additional_instructions}
 
-החזר רק את טקסט הפוסט, ללא הסברים נוספים."""
+🔗 הקישור לאתר: https://loan-israel.co.il/category/כלים-ומחשבונים/
+
+החזר רק את טקסט הפוסט, ללא הסברים."""
 
 # Prompt ליצירת prompt לתמונה
-IMAGE_PROMPT_GENERATOR = """Based on this Facebook post content, create an image generation prompt for FLUX AI model.
+IMAGE_PROMPT_GENERATOR = """Create an image generation prompt for FLUX AI model.
+
+Context: This is for a Facebook post offering FREE financial calculators that website owners can embed on their sites. The calculators help visitors make financial decisions (loans, mortgages, savings, etc.)
 
 Facebook Post (in Hebrew):
 {post_content}
 
 Topic: {topic}
 
-Requirements:
+Requirements for the image:
 1. Write the prompt in English only
-2. Describe a professional, high-quality image suitable for Facebook marketing
-3. Include: scene description, style, lighting, mood, composition
-4. NO text or words in the image
-5. NO logos or brand names
-6. The image should be eye-catching and relevant to the post topic
-7. Use professional photography style
-8. Add "4k quality, professional marketing photo" at the end
+2. Show a professional business/tech scene relevant to websites and finance
+3. Ideas: laptop with calculator on screen, business person looking at financial charts, modern office with digital tools, website mockup with calculator widget
+4. Style: Clean, modern, professional, corporate
+5. Lighting: Bright, optimistic
+6. NO text, words, or numbers visible
+7. NO logos or brand names
+8. Colors: Blues, greens (trust colors), white backgrounds
+9. End with: "4k quality, professional marketing photo, clean composition"
 
-Format: Single paragraph description, 50-100 words.
+Format: Single paragraph, 50-80 words.
 
-Return ONLY the image prompt, no explanations."""
+Return ONLY the image prompt."""
 
 
 class PostGeneratorService:
@@ -159,8 +173,8 @@ class PostGeneratorService:
         
         result = await self._call_gpt(
             prompt=prompt,
-            system_message="אתה מומחה שיווק דיגיטלי שיוצר פוסטים מעניינים לפייסבוק בעברית.",
-            temperature=0.9  # יותר יצירתיות
+            system_message="אתה מומחה שיווק דיגיטלי לעסקים B2B. אתה כותב פוסטים לקבוצות פייסבוק של בעלי אתרים, יזמים ומשווקים. המטרה שלך היא לגרום להם להטמיע מחשבונים פיננסיים חינמיים באתר שלהם. אתה כותב בעברית, בטון מקצועי אבל נגיש.",
+            temperature=0.85
         )
         
         if result:
