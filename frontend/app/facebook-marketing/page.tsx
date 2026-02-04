@@ -867,7 +867,7 @@ const PostsTab: React.FC<{
                     </button>
                   </div>
                 </div>
-              )
+              )}
             </div>
 
             {editingId === post.id ? (
