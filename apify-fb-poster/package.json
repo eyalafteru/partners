@@ -1,0 +1,15 @@
+{
+  "name": "facebook-group-poster",
+  "version": "1.0.0",
+  "description": "Custom Facebook Group Auto-Poster with Israeli proxy, human-like typing, and cookie validation",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "dependencies": {
+    "apify": "^3.1.0",
+    "playwright": "^1.40.0"
+  },
+  "author": "PartnerCalc OS",
+  "license": "ISC"
+}

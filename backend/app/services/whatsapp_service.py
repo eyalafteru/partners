@@ -115,6 +115,38 @@ class WhatsAppService:
 http://partners.ppcmedia.co.il/leads"""
         
         return await self.send_to_all_active(message, email_id)
+    
+    async def send_facebook_comment_alert(
+        self,
+        group_name: str,
+        commenter_name: str,
+        comment_text: str,
+        suggested_response: str = None,
+        post_id: int = None
+    ):
+        """שליחת התראה על תגובה חדשה בפייסבוק"""
+        # קיצור הטקסטים אם צריך
+        comment_preview = comment_text[:150] + "..." if len(comment_text) > 150 else comment_text
+        
+        message = f"""📱 *תגובה חדשה בפייסבוק!*
+
+📁 *קבוצה:* {group_name}
+👤 *מגיב:* {commenter_name}
+💬 *תגובה:* {comment_preview}"""
+        
+        if suggested_response:
+            response_preview = suggested_response[:150] + "..." if len(suggested_response) > 150 else suggested_response
+            message += f"""
+
+🤖 *הצעת תשובה:*
+{response_preview}"""
+        
+        message += """
+
+👉 כנס למערכת לאישור:
+http://partners.ppcmedia.co.il/facebook-marketing"""
+        
+        return await self.send_to_all_active(message)
 
 
 # Singleton

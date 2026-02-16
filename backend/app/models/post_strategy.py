@@ -22,9 +22,9 @@ class PostStrategy(Base):
     icon = Column(String(10), comment="אימוג'י")
     description = Column(String(255), comment="תיאור קצר")
     
-    # תוכן ל-AI
-    system_prompt = Column(Text, comment="הנחיות ל-AI")
-    post_template = Column(Text, comment="תבנית עם משתנים: {calculator_name}, {calculator_url}")
+    # תוכן ל-AI - משתנים דינמיים: {group_name}, {calculator_name}, {calculator_url}, {calculator_summary}
+    system_prompt = Column(Text, comment="הנחיות ל-AI (משתנים: {group_name}, {calculator_name}, {calculator_url}, {calculator_summary})")
+    post_template = Column(Text, comment="תבנית/הנחיות נוספות (משתנים: {group_name}, {calculator_name}, {calculator_url}, {calculator_summary})")
     example_post = Column(Text, comment="דוגמה לפוסט")
     
     # הגדרות

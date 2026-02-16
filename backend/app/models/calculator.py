@@ -34,6 +34,10 @@ class Calculator(Base):
     # קוד הטמעה
     embed_code_template = Column(Text, comment="קוד HTML/JS להטמעה")
     
+    # וידאו דמו - נוצר עם Playwright
+    demo_video_url = Column(String(500), nullable=True, comment="URL לסרטון דמו של המחשבון")
+    youtube_url = Column(String(500), nullable=True, comment="URL לסרטון ביוטיוב")
+    
     # סטטוס
     is_active = Column(Boolean, default=True, comment="האם המחשבון פעיל?")
     

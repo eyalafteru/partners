@@ -17,9 +17,13 @@ from app.models.facebook_marketing import (
     FacebookMessage,
     FacebookPostTemplate
 )
+from app.models.post_strategy import PostStrategy
+from app.models.calculator import Calculator
 from app.services.post_generator_service import get_post_generator_service
 from app.services.apify_service import get_apify_service
 from app.services.facebook_reply_service import get_facebook_reply_service
+from app.services.whatsapp_service import get_whatsapp_service
+from app.services.anti_spam_service import AntiSpamService
 
 
 class FacebookMarketingService:
@@ -30,6 +34,8 @@ class FacebookMarketingService:
         self.post_generator = get_post_generator_service()
         self.apify = get_apify_service()
         self.reply_bot = get_facebook_reply_service()
+        self.whatsapp = get_whatsapp_service()
+        self.anti_spam = AntiSpamService(session)
     
     # ========== Groups Management ==========
     
@@ -153,7 +159,7 @@ class FacebookMarketingService:
         return result.scalar_one_or_none()
     
     async def generate_campaign_posts(self, campaign_id: int) -> List[FacebookPost]:
-        """יצירת פוסטים לקמפיין"""
+        """יצירת פוסטים לקמפיין - משתמש באסטרטגיות ומחשבונים!"""
         campaign = await self.get_campaign(campaign_id)
         if not campaign:
             raise ValueError(f"Campaign {campaign_id} not found")
@@ -173,6 +179,29 @@ class FacebookMarketingService:
         if not groups:
             raise ValueError("No target groups found")
         
+        # 🎯 קבלת אסטרטגיות מהקמפיין
+        strategies = []
+        strategy_ids = campaign.strategy_ids or []
+        if strategy_ids:
+            strat_result = await self.session.execute(
+                select(PostStrategy).where(
+                    PostStrategy.id.in_(strategy_ids),
+                    PostStrategy.is_active == True
+                )
+            )
+            strategies = strat_result.scalars().all()
+            logger.info(f"📋 Found {len(strategies)} strategies for campaign: {[s.name for s in strategies]}")
+        
+        # 🧮 קבלת מחשבון מהקמפיין
+        calculator = None
+        if campaign.calculator_id:
+            calc_result = await self.session.execute(
+                select(Calculator).where(Calculator.id == campaign.calculator_id)
+            )
+            calculator = calc_result.scalar_one_or_none()
+            if calculator:
+                logger.info(f"🧮 Using calculator: {calculator.name}")
+        
         # קבלת תבנית אם יש
         base_template = ""
         if campaign.template_id:
@@ -185,29 +214,84 @@ class FacebookMarketingService:
             if template:
                 base_template = template.base_content
         
-        # יצירת פוסטים
-        groups_data = [{"id": g.id, "name": g.name} for g in groups]
-        
-        generated = await self.post_generator.generate_campaign_posts(
-            topic=campaign.topic,
-            groups=groups_data,
-            image_percentage=campaign.image_percentage,
-            base_template=base_template,
-            target_audience=campaign.target_audience or ""
-        )
-        
-        # שמירת הפוסטים ב-DB
+        # יצירת פוסטים - משתמשים באסטרטגיות!
         posts = []
-        for gen_post in generated:
-            post = FacebookPost(
-                campaign_id=campaign.id,
-                group_id=gen_post["group_id"],
-                content=gen_post.get("content", ""),
-                has_image=gen_post.get("has_image", False),
-                image_prompt=gen_post.get("image_prompt"),
-                image_url=gen_post.get("image_url"),
-                status="pending_approval" if gen_post.get("content") else "failed"
-            )
+        include_first_comment = campaign.link_placement == "first_comment"
+        
+        for i, group in enumerate(groups):
+            # בחירת אסטרטגיה (רוטציה בין האסטרטגיות)
+            strategy = strategies[i % len(strategies)] if strategies else None
+            
+            if strategy and calculator:
+                # ✨ יצירה עם אסטרטגיה ומחשבון
+                logger.info(f"📝 Generating with strategy '{strategy.name}' for group '{group.name}'")
+                
+                gen_result = await self.post_generator.generate_strategic_post(
+                    calculator_name=calculator.name,
+                    calculator_url=calculator.target_url or "",
+                    calculator_summary=calculator.ai_summary or calculator.intent_description or "",
+                    strategy_system_prompt=strategy.system_prompt or "",
+                    strategy_post_template=strategy.post_template or "",
+                    group_name=group.name,
+                    previous_posts=[],
+                    include_first_comment=include_first_comment
+                )
+                
+                # הכנת תוכן הפוסט עם לינק YouTube אם צריך
+                post_content = gen_result.get("post_content", "")
+                youtube_url = None
+                
+                # בדיקה אם צריך לכלול וידאו
+                media_pref = campaign.media_preference or "image"
+                if media_pref in ["video", "both"] and calculator.youtube_url:
+                    youtube_url = calculator.youtube_url
+                    # הוספת לינק YouTube לתוכן הפוסט אם הוא לא קיים כבר
+                    if youtube_url not in post_content:
+                        post_content = f"{post_content}\n\n🎥 צפה בהדגמה:\n{youtube_url}"
+                
+                # 🐞 DEBUG: שמירת הפרומפט המלא
+                debug_prompt = gen_result.get("debug_full_prompt", "")
+                if gen_result.get("debug_system_message"):
+                    debug_prompt = f"=== SYSTEM MESSAGE ===\n{gen_result.get('debug_system_message')}\n\n=== USER PROMPT ===\n{debug_prompt}"
+                
+                post = FacebookPost(
+                    campaign_id=campaign.id,
+                    group_id=group.id,
+                    content=post_content,
+                    first_comment_content=gen_result.get("first_comment_content"),
+                    calculator_id=calculator.id,
+                    strategy_id=strategy.id,
+                    youtube_url=youtube_url,
+                    status="pending_approval" if post_content else "failed",
+                    debug_ai_prompt=debug_prompt if debug_prompt else None  # 🐞 DEBUG
+                )
+                
+                # עדכון מונה שימוש באסטרטגיה
+                strategy.times_used = (strategy.times_used or 0) + 1
+                
+            else:
+                # יצירה רגילה (ללא אסטרטגיה)
+                logger.info(f"📝 Generating without strategy for group '{group.name}'")
+                
+                gen_posts = await self.post_generator.generate_campaign_posts(
+                    topic=campaign.topic,
+                    groups=[{"id": group.id, "name": group.name}],
+                    image_percentage=campaign.image_percentage,
+                    base_template=base_template,
+                    target_audience=campaign.target_audience or ""
+                )
+                
+                gen_post = gen_posts[0] if gen_posts else {}
+                post = FacebookPost(
+                    campaign_id=campaign.id,
+                    group_id=group.id,
+                    content=gen_post.get("content", ""),
+                    has_image=gen_post.get("has_image", False),
+                    image_prompt=gen_post.get("image_prompt"),
+                    image_url=gen_post.get("image_url"),
+                    status="pending_approval" if gen_post.get("content") else "failed"
+                )
+            
             self.session.add(post)
             posts.append(post)
         
@@ -221,7 +305,7 @@ class FacebookMarketingService:
         return posts
     
     async def generate_single_post(self, campaign_id: int, group_id: int) -> Optional[FacebookPost]:
-        """יצירת פוסט בודד לקבוצה בקמפיין"""
+        """יצירת פוסט בודד לקבוצה בקמפיין - משתמש באסטרטגיות!"""
         campaign = await self.get_campaign(campaign_id)
         if not campaign:
             raise ValueError(f"Campaign {campaign_id} not found")
@@ -234,17 +318,29 @@ class FacebookMarketingService:
         if not group:
             raise ValueError(f"Group {group_id} not found")
         
-        # קבלת תבנית אם יש
-        base_template = ""
-        if campaign.template_id:
-            template_result = await self.session.execute(
-                select(FacebookPostTemplate).where(
-                    FacebookPostTemplate.id == campaign.template_id
+        # 🎯 קבלת אסטרטגיה אקראית מהקמפיין
+        strategy = None
+        strategy_ids = campaign.strategy_ids or []
+        if strategy_ids:
+            import random
+            random_strategy_id = random.choice(strategy_ids)
+            strat_result = await self.session.execute(
+                select(PostStrategy).where(
+                    PostStrategy.id == random_strategy_id,
+                    PostStrategy.is_active == True
                 )
             )
-            template = template_result.scalar_one_or_none()
-            if template:
-                base_template = template.base_content
+            strategy = strat_result.scalar_one_or_none()
+            if strategy:
+                logger.info(f"📋 Using strategy: {strategy.name}")
+        
+        # 🧮 קבלת מחשבון מהקמפיין
+        calculator = None
+        if campaign.calculator_id:
+            calc_result = await self.session.execute(
+                select(Calculator).where(Calculator.id == campaign.calculator_id)
+            )
+            calculator = calc_result.scalar_one_or_none()
         
         # קבלת פוסטים קודמים לקבוצה זו (להימנע מחזרות)
         prev_posts_result = await self.session.execute(
@@ -255,14 +351,63 @@ class FacebookMarketingService:
         )
         previous_posts = [p[0] for p in prev_posts_result.fetchall() if p[0]]
         
-        # יצירת הפוסט
-        content = await self.post_generator.generate_post_variation(
-            topic=campaign.topic,
-            group_name=group.name,
-            target_audience=campaign.target_audience or "",
-            base_template=base_template,
-            previous_posts=previous_posts
-        )
+        include_first_comment = campaign.link_placement == "first_comment"
+        content = None
+        first_comment_content = None
+        strategy_id = None
+        calculator_id = None
+        debug_ai_prompt = None  # 🐞 DEBUG
+        
+        if strategy and calculator:
+            # ✨ יצירה עם אסטרטגיה ומחשבון
+            logger.info(f"📝 Generating with strategy '{strategy.name}' and calculator '{calculator.name}'")
+            
+            gen_result = await self.post_generator.generate_strategic_post(
+                calculator_name=calculator.name,
+                calculator_url=calculator.target_url or "",
+                calculator_summary=calculator.ai_summary or calculator.intent_description or "",
+                strategy_system_prompt=strategy.system_prompt or "",
+                strategy_post_template=strategy.post_template or "",
+                group_name=group.name,
+                previous_posts=previous_posts,
+                include_first_comment=include_first_comment
+            )
+            
+            content = gen_result.get("post_content")
+            first_comment_content = gen_result.get("first_comment_content")
+            strategy_id = strategy.id
+            calculator_id = calculator.id
+            
+            # 🐞 DEBUG: שמירת הפרומפט המלא
+            debug_prompt = gen_result.get("debug_full_prompt", "")
+            if gen_result.get("debug_system_message"):
+                debug_ai_prompt = f"=== SYSTEM MESSAGE ===\n{gen_result.get('debug_system_message')}\n\n=== USER PROMPT ===\n{debug_prompt}"
+            else:
+                debug_ai_prompt = debug_prompt
+            
+            # עדכון מונה שימוש באסטרטגיה
+            strategy.times_used = (strategy.times_used or 0) + 1
+        else:
+            # יצירה רגילה (ללא אסטרטגיה)
+            # קבלת תבנית אם יש
+            base_template = ""
+            if campaign.template_id:
+                template_result = await self.session.execute(
+                    select(FacebookPostTemplate).where(
+                        FacebookPostTemplate.id == campaign.template_id
+                    )
+                )
+                template = template_result.scalar_one_or_none()
+                if template:
+                    base_template = template.base_content
+            
+            content = await self.post_generator.generate_post_variation(
+                topic=campaign.topic,
+                group_name=group.name,
+                target_audience=campaign.target_audience or "",
+                base_template=base_template,
+                previous_posts=previous_posts
+            )
         
         if not content:
             return None
@@ -286,6 +431,15 @@ class FacebookMarketingService:
                     replicate = get_replicate_service()
                     image_url = await replicate.generate_post_image(image_prompt, use_lora=True)
         
+        # בדיקה אם צריך לכלול וידאו
+        youtube_url = None
+        media_pref = campaign.media_preference or "image"
+        if media_pref in ["video", "both"] and calculator and calculator.youtube_url:
+            youtube_url = calculator.youtube_url
+            # הוספת לינק YouTube לתוכן הפוסט אם הוא לא קיים כבר
+            if youtube_url not in content:
+                content = f"{content}\n\n🎥 צפה בהדגמה:\n{youtube_url}"
+        
         # יצירת הפוסט ב-DB
         post = FacebookPost(
             campaign_id=campaign.id,
@@ -294,7 +448,12 @@ class FacebookMarketingService:
             has_image=has_image,
             image_prompt=image_prompt,
             image_url=image_url,
-            status="pending_approval"
+            youtube_url=youtube_url,
+            first_comment_content=first_comment_content,
+            calculator_id=calculator_id,
+            strategy_id=strategy_id,
+            status="pending_approval",
+            debug_ai_prompt=debug_ai_prompt if debug_ai_prompt else None  # 🐞 DEBUG
         )
         self.session.add(post)
         
@@ -370,8 +529,8 @@ class FacebookMarketingService:
         if not post:
             raise ValueError(f"Post {post_id} not found")
         
-        if post.status != "approved":
-            raise ValueError(f"Post {post_id} is not approved")
+        if post.status not in ("approved", "failed"):
+            raise ValueError(f"Post {post_id} is not approved or failed (current: {post.status})")
         
         # קבלת הקבוצה
         group = await self.session.execute(
@@ -385,6 +544,15 @@ class FacebookMarketingService:
             await self.session.flush()
             return post
         
+        # בדיקת Anti-Spam
+        can_post, reason = await self.anti_spam.can_post_to_group(post.group_id)
+        if not can_post:
+            post.status = "approved"  # חזרה לסטטוס מאושר להמתנה
+            post.publish_error = reason
+            await self.session.flush()
+            logger.warning(f"📤 ⏳ Post {post_id} delayed: {reason}")
+            return post
+        
         # פרסום דרך Apify
         post.status = "publishing"
         await self.session.flush()
@@ -395,28 +563,144 @@ class FacebookMarketingService:
         )
         
         if run_info:
-            post.status = "published"
-            post.apify_run_id = run_info.get("id")
-            post.published_at = datetime.utcnow()
+            run_id = run_info.get("id")
+            post.apify_run_id = run_id
             
-            # עדכון קבוצה
-            group.total_posts += 1
-            group.last_post_at = datetime.utcnow()
+            # המתנה לסיום הריצה
+            logger.info(f"📤 Waiting for Apify run {run_id} to complete...")
+            final_status = await self.apify.wait_for_run(run_id, max_wait_seconds=180)
             
-            # עדכון קמפיין
-            if post.campaign_id:
-                campaign = await self.get_campaign(post.campaign_id)
-                if campaign:
-                    campaign.total_posts_published += 1
-            
-            logger.info(f"📤 ✅ Post {post_id} published")
+            if final_status and final_status.get("status") == "SUCCEEDED":
+                # שליפת תוצאות
+                dataset = await self.apify.get_run_dataset(run_id)
+                logger.info(f"📤 Apify dataset results: {dataset}")
+                
+                # בדיקה אם הפוסט באמת הצליח - חיפוש סיבות כישלון בתוצאות
+                failure_reason = self._check_for_failure_in_results(dataset)
+                if failure_reason:
+                    post.status = "failed"
+                    post.publish_error = f"Apify: {failure_reason}"
+                    logger.error(f"📤 ❌ Post {post_id} failed inside Apify: {failure_reason}")
+                    await self.session.flush()
+                    return post
+                
+                # ניסיון לחלץ URL הפוסט מהתוצאות
+                fb_post_url = self._extract_post_url_from_results(dataset, group.url)
+                if fb_post_url:
+                    post.fb_post_url = fb_post_url
+                    logger.info(f"📤 Extracted post URL: {fb_post_url}")
+                else:
+                    # אם אין URL בתוצאות, ננסה לבנות אחד מ-group URL
+                    logger.warning(f"📤 Could not extract post URL from Apify results")
+                
+                post.status = "published"
+                post.publish_error = None  # ניקוי שגיאות ישנות
+                post.published_at = datetime.utcnow()
+                
+                # עדכון קבוצה
+                group.total_posts += 1
+                group.last_post_at = datetime.utcnow()
+                
+                # עדכון קמפיין
+                if post.campaign_id:
+                    campaign = await self.get_campaign(post.campaign_id)
+                    if campaign:
+                        campaign.total_posts_published += 1
+                
+                logger.info(f"📤 ✅ Post {post_id} published successfully")
+            else:
+                # הריצה נכשלה
+                status_str = final_status.get("status") if final_status else "UNKNOWN"
+                post.status = "failed"
+                post.publish_error = f"Apify run ended with status: {status_str}"
+                logger.error(f"📤 ❌ Post {post_id} publish failed - Apify status: {status_str}")
         else:
             post.status = "failed"
-            post.publish_error = "Apify run failed"
-            logger.error(f"📤 ❌ Post {post_id} publish failed")
+            post.publish_error = "Failed to start Apify run"
+            logger.error(f"📤 ❌ Post {post_id} publish failed - could not start Apify run")
         
         await self.session.flush()
         return post
+    
+    def _check_for_failure_in_results(self, dataset: list) -> Optional[str]:
+        """
+        בדיקה אם הפוסט נכשל בתוך תוצאות Apify
+        תומך גם באקטור הישן (bhansalisoft) וגם באקטור המותאם אישית
+        
+        Args:
+            dataset: תוצאות מ-Apify
+            
+        Returns:
+            סיבת הכישלון או None אם הצליח
+        """
+        if not dataset:
+            return "No results from Apify"
+        
+        for item in dataset:
+            # בדיקת סטטוס תחילה (תומך באקטור המותאם: success, failed, cookie_expired, blocked)
+            # חשוב: אם הסטטוס הוא success, מתעלמים משדה error (יכול להכיל הערות שאינן שגיאה)
+            status = item.get("status") or item.get("Status")
+            
+            if status and status.lower() == "success":
+                # הפוסט הצליח - אין כישלון
+                continue
+            
+            if status and status.lower() in ["failed", "error", "blocked", "cookie_expired"]:
+                reason = item.get("error") or item.get("message") or item.get("reason") or status
+                if status.lower() == "cookie_expired":
+                    logger.error("🍪 ❌ COOKIE EXPIRED! יש לעדכן את ה-Cookie דרך המערכת")
+                    return "Cookie פייסבוק פג תוקף - יש לעדכן Cookie חדש דרך המערכת"
+                if status.lower() == "blocked":
+                    logger.error("🚫 BLOCKED by Facebook!")
+                    return f"חסום על ידי פייסבוק: {reason}"
+                return str(reason)
+            
+            # בדיקת שדות כישלון נפוצים (רק אם אין שדה status ברור)
+            for fail_field in ["Failed_Reason", "failed_reason", "failedReason", "error", "Error", "errorMessage"]:
+                if fail_field in item and item[fail_field]:
+                    return str(item[fail_field])
+            
+            # בדיקה ספציפית ל-bhansalisoft actor
+            if item.get("Posted") == False or item.get("posted") == False:
+                reason = item.get("Failed_Reason") or item.get("message") or "Post failed"
+                return str(reason)
+        
+        return None
+    
+    def _extract_post_url_from_results(
+        self, 
+        dataset: list, 
+        group_url: str
+    ) -> Optional[str]:
+        """
+        חילוץ URL הפוסט מתוצאות Apify
+        
+        Args:
+            dataset: תוצאות מ-Apify
+            group_url: URL הקבוצה
+            
+        Returns:
+            URL הפוסט או None
+        """
+        if not dataset:
+            return None
+        
+        # ניסיון לחלץ URL מהתוצאות (תלוי בפורמט של ה-Actor)
+        for item in dataset:
+            # ניסיון שדות נפוצים
+            for field in ["postUrl", "post_url", "url", "postLink", "link", "permalink"]:
+                if field in item and item[field]:
+                    return item[field]
+            
+            # בדיקה אם יש post_id שניתן לבנות ממנו URL
+            for id_field in ["postId", "post_id", "id"]:
+                if id_field in item and item[id_field]:
+                    post_id = item[id_field]
+                    # בניית URL מ-post_id וקבוצה
+                    if "groups" in group_url:
+                        return f"{group_url.rstrip('/')}/posts/{post_id}"
+        
+        return None
     
     # ========== Replies Management ==========
     
@@ -481,6 +765,28 @@ class FacebookMarketingService:
         post.replies_count = (post.replies_count or 0) + len(new_replies)
         
         await self.session.flush()
+        
+        # שליחת התראות WhatsApp על תגובות חדשות
+        if new_replies:
+            # קבלת שם הקבוצה
+            group_result = await self.session.execute(
+                select(FacebookGroup).where(FacebookGroup.id == post.group_id)
+            )
+            group = group_result.scalar_one_or_none()
+            group_name = group.name if group else "קבוצה לא ידועה"
+            
+            # שליחת התראה על כל תגובה חדשה
+            for reply in new_replies:
+                try:
+                    await self.whatsapp.send_facebook_comment_alert(
+                        group_name=group_name,
+                        commenter_name=reply.fb_user_name or "משתמש",
+                        comment_text=reply.message or "",
+                        suggested_response=None,  # עדיין אין הצעת תשובה
+                        post_id=post.id
+                    )
+                except Exception as e:
+                    logger.warning(f"💬 ⚠️ Failed to send WhatsApp alert: {e}")
         
         logger.info(f"💬 ✅ Synced {len(new_replies)} new replies for post {post_id}")
         return new_replies
@@ -551,13 +857,29 @@ class FacebookMarketingService:
         if final_channel == "messenger":
             # שליחה למסנג'ר
             if reply.fb_user_profile_url:
-                await self.apify.send_single_message(
+                result = await self.apify.send_single_message(
                     profile_url=reply.fb_user_profile_url,
                     message=final_response
                 )
+                if not result:
+                    logger.warning(f"💬 ⚠️ Messenger send may have failed for reply {reply_id}")
         else:
-            # TODO: שליחת תגובה בפייסבוק - דורש Actor מותאם
-            logger.warning("Comment reply not yet implemented - needs custom Actor")
+            # שליחת תגובה בפייסבוק
+            post = await self.session.execute(
+                select(FacebookPost).where(FacebookPost.id == reply.post_id)
+            )
+            post = post.scalar_one_or_none()
+            
+            if post and post.fb_post_url:
+                result = await self.apify.reply_to_comment(
+                    post_url=post.fb_post_url,
+                    reply_message=final_response,
+                    comment_id=reply.fb_comment_id
+                )
+                if not result or not result.get("success"):
+                    logger.warning(f"💬 ⚠️ Comment reply may have failed for reply {reply_id}")
+            else:
+                logger.warning(f"💬 ⚠️ Cannot reply to comment - post URL not found for reply {reply_id}")
         
         # עדכון
         reply.actual_response = final_response

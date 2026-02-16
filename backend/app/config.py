@@ -81,27 +81,37 @@ class Settings(BaseSettings):
     apify_token: str = ""  # Set via APIFY_TOKEN env variable
     
     # ========== Apify - Facebook Marketing Actors ==========
-    apify_fb_poster_actor: str = "bhansalisoft/facebook-group-auto-poster"
-    apify_fb_comments_actor: str = "apify/facebook-comments-scraper"
-    apify_fb_messenger_actor: str = "clothefobia/facebook-auto-message-sender"
-    apify_fb_groups_scraper: str = "memo23/facebook-search-groups-scraper"
+    apify_fb_poster_actor: str = "bhansalisoft~facebook-group-auto-poster"
+    apify_fb_poster_custom_actor: str = ""  # Custom actor ID (set after apify push)
+    apify_fb_comments_actor: str = "apify~facebook-comments-scraper"
+    apify_fb_messenger_actor: str = "clothefobia~facebook-auto-message-sender"
+    apify_fb_groups_scraper: str = "memo23~facebook-search-groups-scraper"
+    apify_fb_comment_reply_actor: str = ""  # Custom actor for replying to comments - set after deployment
     
     # ========== Facebook - Cookie for Apify Actors ==========
     facebook_cookie: str = ""  # JSON cookie from browser extension
+    facebook_cookie_updated_at: str = ""  # Timestamp of last cookie update
+    facebook_access_token: str = ""  # Facebook Graph API access token
     
     # ========== Facebook - Anti-Spam Settings ==========
-    fb_max_posts_per_day: int = 10  # מקסימום פוסטים ליום
-    fb_max_posts_per_group_per_week: int = 1  # מקסימום פוסט לקבוצה בשבוע
+    fb_max_posts_per_day: int = 100  # מקסימום פוסטים ליום - מבוטל לבדיקות
+    fb_max_posts_per_group_per_week: int = 100  # מקסימום פוסט לקבוצה בשבוע - מבוטל לבדיקות
     fb_min_delay_between_posts: int = 300  # מינימום 5 דקות בין פוסטים (בשניות)
     fb_max_delay_between_posts: int = 900  # מקסימום 15 דקות בין פוסטים (בשניות)
-    fb_posting_hours_start: int = 8  # שעת התחלה לפרסום (08:00)
-    fb_posting_hours_end: int = 22  # שעת סיום לפרסום (22:00)
+    fb_posting_hours_start: int = 0  # שעת התחלה לפרסום (00:00) - ללא הגבלה
+    fb_posting_hours_end: int = 24  # שעת סיום לפרסום (24:00) - ללא הגבלה
     fb_max_replies_per_hour: int = 20  # מקסימום תגובות בשעה
     fb_cooldown_after_block: int = 86400  # המתנה של 24 שעות אחרי חסימה (בשניות)
     
     # ========== Replicate - Image Generation ==========
     replicate_api_token: str = ""  # Set via REPLICATE_API_TOKEN env variable
     replicate_flux_version: str = "091495765fa5ef2725a175a57b276ec30dc9d39c22d30410f2ede68a3eab66b3"
+    
+    # ========== YouTube - Video Upload ==========
+    youtube_client_id: str = ""
+    youtube_client_secret: str = ""
+    youtube_refresh_token: str = ""
+    youtube_channel_id: str = ""
     
     # ========== Proxy ==========
     proxy_service_url: Optional[str] = None
@@ -205,6 +215,14 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """קבלת הגדרות (cached)"""
     return Settings()
+
+
+def reload_settings():
+    """טעינה מחדש של הגדרות (ניקוי cache)"""
+    get_settings.cache_clear()
+    global settings
+    settings = get_settings()
+    return settings
 
 
 # ייצוא הגדרות גלובלי

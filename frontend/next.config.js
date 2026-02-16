@@ -9,11 +9,15 @@ const nextConfig = {
   // In Docker: backend container name
   // In dev: localhost:8000
   async rewrites() {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
     return [
       {
         source: '/api/:path*',
         destination: `${backendUrl}/api/:path*`,
+      },
+      {
+        source: '/static/:path*',
+        destination: `${backendUrl}/static/:path*`,
       },
     ]
   },

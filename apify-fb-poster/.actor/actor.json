@@ -1,0 +1,9 @@
+{
+  "actorSpecification": 1,
+  "name": "facebook-group-poster",
+  "title": "Facebook Group Auto-Poster",
+  "description": "Posts to Facebook groups using Playwright with Israeli residential proxy, human-like typing, cookie validation, and post verification.",
+  "version": "1.0",
+  "input": "./input_schema.json",
+  "dockerfile": "../Dockerfile"
+}

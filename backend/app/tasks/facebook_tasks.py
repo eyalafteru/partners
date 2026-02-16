@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import List
 from loguru import logger
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_, func
 
 from app.database import get_async_session_context
 from app.models.facebook_marketing import (
@@ -108,9 +108,30 @@ async def generate_pending_responses():
 async def check_scheduled_posts():
     """
     בדיקת פוסטים מתוזמנים לפרסום
+    כולל שחזור פוסטים תקועים בסטטוס publishing
     """
     try:
         async with get_async_session_context() as session:
+            # שחזור פוסטים תקועים בסטטוס "publishing" יותר מ-10 דקות
+            ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
+            stuck_result = await session.execute(
+                select(FacebookPost).where(
+                    and_(
+                        FacebookPost.status == "publishing",
+                        func.coalesce(FacebookPost.updated_at, FacebookPost.created_at) < ten_minutes_ago
+                    )
+                )
+            )
+            stuck_posts = stuck_result.scalars().all()
+            
+            if stuck_posts:
+                logger.warning(f"🔄 Found {len(stuck_posts)} posts stuck in 'publishing' state, resetting to 'approved'")
+                for stuck_post in stuck_posts:
+                    stuck_post.status = "approved"
+                    stuck_post.publish_error = "Reset: was stuck in publishing state for over 10 minutes"
+                    logger.info(f"🔄 Reset post {stuck_post.id} from 'publishing' back to 'approved'")
+                await session.flush()
+            
             # מציאת פוסטים מאושרים שמחכים לפרסום
             result = await session.execute(
                 select(FacebookPost).where(

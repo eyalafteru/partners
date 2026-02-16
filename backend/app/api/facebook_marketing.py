@@ -4,10 +4,11 @@ API endpoints לניהול פרסום בקבוצות פייסבוק
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from typing import List, Optional
 from pydantic import BaseModel, validator
 from datetime import datetime
+from loguru import logger
 
 from app.database import get_async_session
 from app.models.facebook_marketing import (
@@ -20,6 +21,7 @@ from app.models.facebook_marketing import (
     FacebookPostTemplate
 )
 from app.services.facebook_marketing_service import get_facebook_marketing_service
+from app.services.apify_service import get_apify_service
 
 router = APIRouter()
 
@@ -76,6 +78,7 @@ class CampaignCreate(BaseModel):
     auto_responder_template: Optional[str] = None
     auto_responder_delay_minutes: int = 5
     auto_responder_daily_limit: int = 50
+    media_preference: Optional[str] = "image"  # image, video, both, none
 
 class CampaignResponse(BaseModel):
     id: int
@@ -101,6 +104,7 @@ class CampaignResponse(BaseModel):
     auto_responder_template: Optional[str] = None
     auto_responder_delay_minutes: Optional[int] = 5
     auto_responder_daily_limit: Optional[int] = 50
+    media_preference: Optional[str] = "image"
     
     @validator('strategy_ids', 'target_group_ids', pre=True, always=True)
     def convert_none_to_list(cls, v):
@@ -116,8 +120,10 @@ class PostResponse(BaseModel):
     content: str
     has_image: bool
     image_url: Optional[str]
+    youtube_url: Optional[str] = None
     status: str
     rejection_reason: Optional[str]
+    publish_error: Optional[str] = None
     replies_count: int
     published_at: Optional[datetime]
     created_at: datetime
@@ -127,6 +133,8 @@ class PostResponse(BaseModel):
     first_comment_content: Optional[str] = None
     first_comment_posted: bool = False
     auto_replies_sent: int = 0
+    # 🐞 DEBUG
+    debug_ai_prompt: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -408,9 +416,15 @@ async def create_campaign(
     session: AsyncSession = Depends(get_async_session)
 ):
     """יצירת קמפיין חדש"""
+    # Debug logging
+    logger.info(f"📥 Creating campaign with data: {data.model_dump()}")
+    logger.info(f"📥 media_preference received: {data.media_preference}")
+    
     service = get_facebook_marketing_service(session)
     campaign = await service.create_campaign(**data.model_dump())
     await session.commit()
+    
+    logger.info(f"📤 Campaign created with media_preference: {campaign.media_preference}")
     return campaign
 
 @router.get("/campaigns/{campaign_id}", response_model=CampaignResponse, tags=["Campaigns"])
@@ -452,6 +466,34 @@ async def update_campaign(
     await session.refresh(campaign)
     
     return campaign
+
+@router.delete("/campaigns/{campaign_id}", tags=["Campaigns"])
+async def delete_campaign(
+    campaign_id: int,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """מחיקת קמפיין וכל הפוסטים שלו"""
+    # FacebookCampaign and FacebookPost are already imported at the top of the file
+    
+    # שליפת הקמפיין
+    result = await session.execute(
+        select(FacebookCampaign).where(FacebookCampaign.id == campaign_id)
+    )
+    campaign = result.scalar_one_or_none()
+    
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    # מחיקת כל הפוסטים של הקמפיין (כולל פורסמו)
+    await session.execute(
+        delete(FacebookPost).where(FacebookPost.campaign_id == campaign_id)
+    )
+    
+    # מחיקת הקמפיין
+    await session.delete(campaign)
+    await session.commit()
+    
+    return {"message": f"Campaign '{campaign.name}' deleted successfully"}
 
 @router.post("/campaigns/{campaign_id}/generate", tags=["Campaigns"])
 async def generate_campaign_posts(
@@ -523,6 +565,66 @@ async def get_post(
         raise HTTPException(status_code=404, detail="Post not found")
     
     return post
+
+
+@router.get("/posts/{post_id}/debug", tags=["Posts", "Debug"])
+async def get_post_debug(
+    post_id: int,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    🐞 DEBUG: צפייה בפרומפט המלא שנשלח ל-AI עבור פוסט ספציפי
+    
+    משמש לאיתור בעיות כמו:
+    - עובדות שגויות
+    - מספרים ממוצאים
+    - התעלמות מהוראות
+    """
+    result = await session.execute(
+        select(FacebookPost).where(FacebookPost.id == post_id)
+    )
+    post = result.scalar_one_or_none()
+    
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    # קבלת פרטים נוספים
+    group_name = None
+    strategy_name = None
+    calculator_name = None
+    
+    if post.group_id:
+        group_result = await session.execute(
+            select(FacebookGroup.name).where(FacebookGroup.id == post.group_id)
+        )
+        group_name = group_result.scalar_one_or_none()
+    
+    if post.strategy_id:
+        from app.models.post_strategy import PostStrategy
+        strategy_result = await session.execute(
+            select(PostStrategy.name).where(PostStrategy.id == post.strategy_id)
+        )
+        strategy_name = strategy_result.scalar_one_or_none()
+    
+    if post.calculator_id:
+        from app.models.calculator import Calculator
+        calc_result = await session.execute(
+            select(Calculator.name).where(Calculator.id == post.calculator_id)
+        )
+        calculator_name = calc_result.scalar_one_or_none()
+    
+    return {
+        "post_id": post.id,
+        "status": post.status,
+        "group_name": group_name,
+        "strategy_name": strategy_name,
+        "calculator_name": calculator_name,
+        "generated_content": post.content,
+        "debug_ai_prompt": post.debug_ai_prompt,
+        "has_debug_prompt": bool(post.debug_ai_prompt),
+        "created_at": post.created_at
+    }
+
 
 @router.put("/posts/{post_id}", response_model=PostResponse, tags=["Posts"])
 async def update_post(
@@ -614,10 +716,86 @@ async def publish_post(
     session: AsyncSession = Depends(get_async_session)
 ):
     """פרסום פוסט"""
+    try:
+        service = get_facebook_marketing_service(session)
+        post = await service.publish_post(post_id)
+        await session.commit()
+        return post
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class BulkPublishRequest(BaseModel):
+    post_ids: List[int]
+    approve_first: bool = True  # אם True, יאשר לפני פרסום
+
+
+class BulkPublishResult(BaseModel):
+    post_id: int
+    success: bool
+    status: Optional[str] = None
+    error: Optional[str] = None
+
+
+@router.post("/posts/bulk-publish", tags=["Posts"])
+async def bulk_publish_posts(
+    data: BulkPublishRequest,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """פרסום מרובה של פוסטים"""
     service = get_facebook_marketing_service(session)
-    post = await service.publish_post(post_id)
-    await session.commit()
-    return post
+    results = []
+    
+    for post_id in data.post_ids:
+        try:
+            # Get post
+            result = await session.execute(
+                select(FacebookPost).where(FacebookPost.id == post_id)
+            )
+            post = result.scalar_one_or_none()
+            
+            if not post:
+                results.append(BulkPublishResult(
+                    post_id=post_id,
+                    success=False,
+                    error="Post not found"
+                ))
+                continue
+            
+            # Approve if needed
+            if data.approve_first and post.status == "pending_approval":
+                post.status = "approved"
+                await session.flush()
+            
+            # Publish
+            if post.status == "approved":
+                published_post = await service.publish_post(post_id)
+                await session.commit()
+                results.append(BulkPublishResult(
+                    post_id=post_id,
+                    success=True,
+                    status=published_post.status
+                ))
+            else:
+                results.append(BulkPublishResult(
+                    post_id=post_id,
+                    success=False,
+                    error=f"Post status is {post.status}, expected approved"
+                ))
+                
+        except Exception as e:
+            results.append(BulkPublishResult(
+                post_id=post_id,
+                success=False,
+                error=str(e)
+            ))
+    
+    return {
+        "total": len(data.post_ids),
+        "successful": len([r for r in results if r.success]),
+        "failed": len([r for r in results if not r.success]),
+        "results": results
+    }
 
 
 class RegenerateRequest(BaseModel):
@@ -885,7 +1063,10 @@ async def get_calculators_for_facebook(
             "name": c.name,
             "category": c.category,
             "url": c.target_url,
-            "has_summary": bool(c.ai_summary) if hasattr(c, 'ai_summary') else False
+            "target_url": c.target_url,
+            "has_summary": bool(c.ai_summary) if hasattr(c, 'ai_summary') else False,
+            "youtube_url": c.youtube_url if hasattr(c, 'youtube_url') else None,
+            "demo_video_url": c.demo_video_url if hasattr(c, 'demo_video_url') else None,
         }
         for c in calculators
     ]
@@ -914,3 +1095,141 @@ async def get_stats(
     """קבלת סטטיסטיקות"""
     service = get_facebook_marketing_service(session)
     return await service.get_stats()
+
+
+# ========== Cookie Management ==========
+
+class CookieUploadRequest(BaseModel):
+    cookies: list  # JSON array of cookie objects
+
+
+@router.post("/cookies/upload", tags=["Cookies"])
+async def upload_cookies(request: CookieUploadRequest):
+    """
+    העלאת cookies חדשים של פייסבוק
+    מקבל JSON array של cookies (מפלאגין Export cookie JSON)
+    שומר ל-.env ומרענן את השירותים
+    """
+    import json
+    import os
+    
+    cookies = request.cookies
+    
+    # Validate cookies - must have c_user, xs, fr
+    cookie_names = {c.get("name") for c in cookies if isinstance(c, dict)}
+    required_cookies = {"c_user", "xs", "fr"}
+    missing = required_cookies - cookie_names
+    
+    if missing:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"חסרים cookies חיוניים: {', '.join(missing)}. יש לייצא מפייסבוק עם הפלאגין."
+        )
+    
+    # Serialize cookies to JSON string
+    cookie_json = json.dumps(cookies, ensure_ascii=False)
+    
+    # Update .env file
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
+    
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            env_content = f.read()
+        
+        # Replace FACEBOOK_COOKIE line
+        import re
+        updated_at = datetime.utcnow().isoformat()
+        
+        if "FACEBOOK_COOKIE=" in env_content:
+            # Replace existing cookie line
+            lines = env_content.split("\n")
+            new_lines = []
+            for line in lines:
+                if line.startswith("FACEBOOK_COOKIE="):
+                    new_lines.append(f"FACEBOOK_COOKIE={cookie_json}")
+                elif line.startswith("FACEBOOK_COOKIE_UPDATED_AT="):
+                    new_lines.append(f"FACEBOOK_COOKIE_UPDATED_AT={updated_at}")
+                else:
+                    new_lines.append(line)
+            env_content = "\n".join(new_lines)
+        else:
+            env_content += f"\nFACEBOOK_COOKIE={cookie_json}\n"
+            env_content += f"FACEBOOK_COOKIE_UPDATED_AT={updated_at}\n"
+        
+        # Add FACEBOOK_COOKIE_UPDATED_AT if not present
+        if "FACEBOOK_COOKIE_UPDATED_AT=" not in env_content:
+            env_content += f"\nFACEBOOK_COOKIE_UPDATED_AT={updated_at}\n"
+        
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write(env_content)
+        
+        # Reload settings and apify service
+        apify = get_apify_service()
+        apify.reload_cookies()
+        
+        logger.info(f"🍪 ✅ Facebook cookies updated: {len(cookies)} cookies, names: {list(cookie_names)}")
+        
+        return {
+            "status": "success",
+            "message": f"Cookies עודכנו בהצלחה ({len(cookies)} cookies)",
+            "cookieCount": len(cookies),
+            "updatedAt": updated_at,
+        }
+        
+    except Exception as e:
+        logger.error(f"🍪 ❌ Failed to update cookies: {e}")
+        raise HTTPException(status_code=500, detail=f"שגיאה בעדכון cookies: {str(e)}")
+
+
+@router.get("/cookies/status", tags=["Cookies"])
+async def get_cookie_status():
+    """
+    בדיקת סטטוס cookies של פייסבוק
+    מחזיר אם יש cookies, כמה, ומתי עודכנו
+    """
+    import json
+    from app.config import get_settings
+    
+    current_settings = get_settings()
+    
+    cookie_str = current_settings.facebook_cookie
+    has_cookie = bool(cookie_str)
+    cookie_count = 0
+    cookie_names = []
+    
+    if has_cookie:
+        try:
+            cookies = json.loads(cookie_str) if isinstance(cookie_str, str) else cookie_str
+            cookie_count = len(cookies)
+            cookie_names = [c.get("name") for c in cookies if isinstance(c, dict)]
+        except:
+            pass
+    
+    # Check for essential cookies
+    essential = {"c_user", "xs", "fr"}
+    has_essential = essential.issubset(set(cookie_names))
+    
+    return {
+        "status": "valid" if (has_cookie and has_essential) else "expired",
+        "hasCookie": has_cookie,
+        "hasEssentialCookies": has_essential,
+        "cookieCount": cookie_count,
+        "cookieNames": cookie_names,
+        "lastUpdated": current_settings.facebook_cookie_updated_at or None,
+    }
+
+
+@router.get("/cookies/open-login", tags=["Cookies"])
+async def open_facebook_login():
+    """
+    פתיחת Chrome לדף ההתחברות של פייסבוק
+    עובד רק כשה-backend רץ מקומית
+    """
+    import webbrowser
+    try:
+        webbrowser.open("https://www.facebook.com/")
+        logger.info("🍪 🌐 Opened Chrome to Facebook for login")
+        return {"status": "opened", "message": "Chrome opened to Facebook"}
+    except Exception as e:
+        logger.error(f"🍪 ❌ Failed to open browser: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to open browser: {str(e)}")

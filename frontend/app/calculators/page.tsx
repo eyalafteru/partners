@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Calculator, Plus, Edit, Trash2, ExternalLink, Copy, Filter, Loader2, Sparkles, RefreshCw, FileText } from 'lucide-react'
+import { Calculator, Plus, Edit, Trash2, ExternalLink, Copy, Filter, Loader2, Sparkles, RefreshCw, FileText, Video, Play, Film, Youtube, Upload } from 'lucide-react'
 
 interface CalcItem {
   id: number
@@ -16,6 +16,8 @@ interface CalcItem {
   scraped_content: string | null
   scraped_at: string | null
   created_at?: string
+  demo_video_url: string | null
+  youtube_url: string | null
 }
 
 interface ScanStatus {
@@ -44,6 +46,10 @@ export default function CalculatorsPage() {
   const [scanningIds, setScanningIds] = useState<Set<number>>(new Set())
   const [expandedSummary, setExpandedSummary] = useState<number | null>(null)
   const [viewingContent, setViewingContent] = useState<CalcItem | null>(null)
+  const [generatingVideoId, setGeneratingVideoId] = useState<number | null>(null)
+  const [viewingVideo, setViewingVideo] = useState<CalcItem | null>(null)
+  const [showVideoOptions, setShowVideoOptions] = useState<number | null>(null)
+  const [uploadingToYouTubeId, setUploadingToYouTubeId] = useState<number | null>(null)
 
   useEffect(() => {
     fetchCalculators()
@@ -139,6 +145,95 @@ export default function CalculatorsPage() {
   const copyEmbed = (code: string) => {
     navigator.clipboard.writeText(code)
     alert('Embed code copied!')
+  }
+
+  const generateVideo = async (calc: CalcItem, withCaptions: boolean = false) => {
+    setGeneratingVideoId(calc.id)
+    try {
+      const response = await fetch(`/api/calculators/${calc.id}/generate-video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: calc.target_url, with_captions: withCaptions })
+      })
+      
+      if (response.ok) {
+        const updatedCalc = await response.json()
+        // עדכון המחשבון ברשימה מיד
+        setCalculators(prev => prev.map(c => 
+          c.id === calc.id ? { ...c, demo_video_url: updatedCalc.demo_video_url } : c
+        ))
+        alert(`וידאו נוצר בהצלחה${withCaptions ? ' (עם כתוביות)' : ''}!`)
+      } else {
+        const error = await response.json()
+        // בדוק אם הוידאו נוצר למרות השגיאה (timeout)
+        await fetchCalculators()
+        alert(`שגיאה ביצירת וידאו: ${error.detail || 'שגיאה לא ידועה'}`)
+      }
+    } catch (error) {
+      console.error('Failed to generate video:', error)
+      // בדוק אם הוידאו נוצר למרות השגיאה (network timeout)
+      await fetchCalculators()
+      alert('שגיאה ביצירת וידאו - אנא בדוק אם הוידאו נוצר')
+    } finally {
+      setGeneratingVideoId(null)
+      setShowVideoOptions(null)
+    }
+  }
+
+  const deleteVideo = async (calcId: number) => {
+    if (!confirm('למחוק את הוידאו?')) return
+    
+    try {
+      const response = await fetch(`/api/calculators/${calcId}/video`, {
+        method: 'DELETE'
+      })
+      
+      if (response.ok) {
+        fetchCalculators()
+      }
+    } catch (error) {
+      console.error('Failed to delete video:', error)
+    }
+  }
+
+  const uploadToYouTube = async (calc: CalcItem) => {
+    if (!calc.demo_video_url) {
+      alert('יש ליצור וידאו דמו לפני ההעלאה ל-YouTube')
+      return
+    }
+    
+    if (calc.youtube_url) {
+      if (!confirm('כבר קיים וידאו ב-YouTube. להעלות חדש?')) return
+    }
+    
+    setUploadingToYouTubeId(calc.id)
+    try {
+      const response = await fetch(`/api/calculators/${calc.id}/upload-to-youtube`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: `${calc.name} - מחשבון`,
+          description: calc.intent_description || `מחשבון ${calc.name} - הדגמה`,
+          tags: calc.keywords || []
+        })
+      })
+      
+      if (response.ok) {
+        const updatedCalc = await response.json()
+        setCalculators(prev => prev.map(c => 
+          c.id === calc.id ? { ...c, youtube_url: updatedCalc.youtube_url } : c
+        ))
+        alert(`וידאו הועלה בהצלחה ל-YouTube!`)
+      } else {
+        const error = await response.json()
+        alert(`שגיאה בהעלאה ל-YouTube: ${error.detail || 'שגיאה לא ידועה'}`)
+      }
+    } catch (error) {
+      console.error('Failed to upload to YouTube:', error)
+      alert('שגיאה בהעלאה ל-YouTube')
+    } finally {
+      setUploadingToYouTubeId(null)
+    }
   }
 
   // Filter calculators by category
@@ -378,7 +473,132 @@ export default function CalculatorsPage() {
                 )}
               </div>
 
-              <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
+              {/* Video Section */}
+              <div className="flex items-center gap-2 py-2 border-t border-gray-100">
+                {calc.demo_video_url || calc.youtube_url ? (
+                  <>
+                    <button
+                      onClick={() => setViewingVideo(calc)}
+                      className={`btn ${calc.youtube_url ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'} text-white flex-1 flex items-center justify-center gap-1 text-sm`}
+                      title={calc.youtube_url ? "צפה ב-YouTube" : "צפה בוידאו"}
+                    >
+                      {calc.youtube_url ? <Youtube className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                      {calc.youtube_url ? 'YouTube' : 'וידאו דמו'}
+                    </button>
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowVideoOptions(showVideoOptions === calc.id ? null : calc.id)}
+                        disabled={generatingVideoId === calc.id}
+                        className="btn btn-secondary text-sm"
+                        title="ייצר וידאו חדש"
+                      >
+                        {generatingVideoId === calc.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-4 h-4" />
+                        )}
+                      </button>
+                      {showVideoOptions === calc.id && (
+                        <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-10 w-48">
+                          <button
+                            onClick={() => generateVideo(calc, false)}
+                            className="btn bg-purple-500 hover:bg-purple-600 text-white text-sm py-1 w-full mb-1"
+                          >
+                            🎬 וידאו רגיל
+                          </button>
+                          <button
+                            onClick={() => generateVideo(calc, true)}
+                            className="btn bg-blue-500 hover:bg-blue-600 text-white text-sm py-1 w-full mb-1"
+                          >
+                            📝 עם כתוביות
+                          </button>
+                          <button
+                            onClick={() => setShowVideoOptions(null)}
+                            className="text-gray-500 text-xs hover:text-gray-700 w-full"
+                          >
+                            ביטול
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => deleteVideo(calc.id)}
+                      className="btn btn-secondary text-red-600 text-sm"
+                      title="מחק וידאו"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                    {/* YouTube Upload Button */}
+                    {calc.youtube_url ? (
+                      <a
+                        href={calc.youtube_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn bg-red-500 hover:bg-red-600 text-white text-sm flex items-center gap-1"
+                        title="צפה ב-YouTube"
+                      >
+                        <Youtube className="w-4 h-4" />
+                        YouTube
+                      </a>
+                    ) : (
+                      <button
+                        onClick={() => uploadToYouTube(calc)}
+                        disabled={uploadingToYouTubeId === calc.id}
+                        className="btn bg-red-500 hover:bg-red-600 text-white text-sm flex items-center gap-1"
+                        title="העלה ל-YouTube"
+                      >
+                        {uploadingToYouTubeId === calc.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Upload className="w-4 h-4" />
+                        )}
+                        <Youtube className="w-4 h-4" />
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex-1 relative">
+                    {generatingVideoId === calc.id ? (
+                      <div className="btn bg-purple-500 text-white flex items-center justify-center gap-1 text-sm w-full">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        מייצר וידאו...
+                      </div>
+                    ) : showVideoOptions === calc.id ? (
+                      <div className="bg-purple-50 border border-purple-200 rounded-lg p-2 flex flex-col gap-2">
+                        <span className="text-xs text-purple-700 font-medium text-center">בחר סוג וידאו:</span>
+                        <button
+                          onClick={() => generateVideo(calc, false)}
+                          className="btn bg-purple-500 hover:bg-purple-600 text-white text-sm py-1"
+                        >
+                          🎬 וידאו רגיל
+                        </button>
+                        <button
+                          onClick={() => generateVideo(calc, true)}
+                          className="btn bg-blue-500 hover:bg-blue-600 text-white text-sm py-1"
+                        >
+                          📝 וידאו עם כתוביות
+                        </button>
+                        <button
+                          onClick={() => setShowVideoOptions(null)}
+                          className="text-gray-500 text-xs hover:text-gray-700"
+                        >
+                          ביטול
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setShowVideoOptions(calc.id)}
+                        className="btn bg-purple-500 hover:bg-purple-600 text-white w-full flex items-center justify-center gap-1 text-sm"
+                      >
+                        <Film className="w-4 h-4" />
+                        ייצר וידאו דמו
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
                 <a
                   href={calc.target_url}
                   target="_blank"
@@ -496,6 +716,106 @@ export default function CalculatorsPage() {
               >
                 סגור
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: View Video */}
+      {viewingVideo && (viewingVideo.demo_video_url || viewingVideo.youtube_url) && (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full overflow-hidden">
+            {/* Header */}
+            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                {viewingVideo.youtube_url ? (
+                  <Youtube className="w-5 h-5 text-red-500" />
+                ) : (
+                  <Play className="w-5 h-5 text-green-500" />
+                )}
+                וידאו דמו: {viewingVideo.name}
+              </h3>
+              <button
+                onClick={() => setViewingVideo(null)}
+                className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Video - YouTube or Local */}
+            <div className="p-4 bg-black">
+              {viewingVideo.youtube_url ? (
+                <iframe
+                  src={`https://www.youtube.com/embed/${viewingVideo.youtube_url.split('/').pop()}?autoplay=1`}
+                  title={viewingVideo.name}
+                  className="w-full aspect-video mx-auto"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                />
+              ) : viewingVideo.demo_video_url ? (
+                <video
+                  src={viewingVideo.demo_video_url}
+                  controls
+                  autoPlay
+                  className="w-full max-h-[60vh] mx-auto"
+                />
+              ) : null}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-gray-200 flex justify-between items-center bg-gray-50">
+              <div className="flex gap-2">
+                {viewingVideo.youtube_url && (
+                  <a
+                    href={viewingVideo.youtube_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn bg-red-500 hover:bg-red-600 text-white flex items-center gap-2"
+                  >
+                    <Youtube className="w-4 h-4" />
+                    פתח ב-YouTube
+                  </a>
+                )}
+                {viewingVideo.demo_video_url && (
+                  <a
+                    href={viewingVideo.demo_video_url}
+                    download
+                    className="btn btn-secondary flex items-center gap-2"
+                  >
+                    <Video className="w-4 h-4" />
+                    הורד וידאו
+                  </a>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    generateVideo(viewingVideo, false)
+                    setViewingVideo(null)
+                  }}
+                  className="btn bg-purple-500 hover:bg-purple-600 text-white flex items-center gap-2"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  ייצר רגיל
+                </button>
+                <button
+                  onClick={() => {
+                    generateVideo(viewingVideo, true)
+                    setViewingVideo(null)
+                  }}
+                  className="btn bg-blue-500 hover:bg-blue-600 text-white flex items-center gap-2"
+                >
+                  📝
+                  ייצר עם כתוביות
+                </button>
+                <button
+                  onClick={() => setViewingVideo(null)}
+                  className="btn btn-secondary"
+                >
+                  סגור
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -8,7 +8,7 @@ import json
 from typing import Optional, Dict, Any, List
 from loguru import logger
 
-from app.config import settings
+from app.config import settings, reload_settings
 
 
 class ApifyService:
@@ -20,12 +20,20 @@ class ApifyService:
         
         # Actor IDs
         self.fb_poster_actor = settings.apify_fb_poster_actor
+        self.fb_poster_custom_actor = settings.apify_fb_poster_custom_actor
         self.fb_comments_actor = settings.apify_fb_comments_actor
         self.fb_messenger_actor = settings.apify_fb_messenger_actor
         self.fb_groups_scraper = settings.apify_fb_groups_scraper
         
-        # Facebook cookie
+        # Facebook cookies - JSON array format only
         self.facebook_cookie = settings.facebook_cookie
+    
+    def reload_cookies(self):
+        """טעינה מחדש של cookies מהגדרות (אחרי עדכון .env)"""
+        new_settings = reload_settings()
+        self.facebook_cookie = new_settings.facebook_cookie
+        self.fb_poster_custom_actor = new_settings.apify_fb_poster_custom_actor
+        logger.info("🍪 Cookies reloaded from settings")
     
     @property
     def is_configured(self) -> bool:
@@ -37,6 +45,11 @@ class ApifyService:
         """בדיקה אם יש Facebook cookie"""
         return bool(self.facebook_cookie)
     
+    @property
+    def use_custom_actor(self) -> bool:
+        """בדיקה אם משתמשים באקטור מותאם אישית"""
+        return bool(self.fb_poster_custom_actor)
+    
     def _get_headers(self) -> Dict[str, str]:
         """הכנת headers לקריאות API"""
         return {
@@ -44,18 +57,54 @@ class ApifyService:
             "Content-Type": "application/json"
         }
     
+    @staticmethod
+    def _normalize_same_site(value: str) -> str:
+        """
+        נרמול ערך sameSite לפורמט שתואם ל-Playwright/Apify
+        Chrome מחזיר ערכים כמו 'no_restriction', 'unspecified' וכו'
+        Playwright מצפה ל: 'Strict', 'Lax', או 'None'
+        """
+        mapping = {
+            "strict": "Strict",
+            "lax": "Lax",
+            "none": "None",
+            "no_restriction": "None",
+            "no restriction": "None",
+            "unspecified": "Lax",
+        }
+        return mapping.get(str(value).lower(), "Lax")
+
     def _parse_cookie(self) -> List[Dict[str, Any]]:
-        """המרת cookie מ-string ל-list"""
+        """המרת cookie מ-string ל-list, עם נרמול sameSite"""
         if not self.facebook_cookie:
             return []
         
         try:
             if isinstance(self.facebook_cookie, str):
-                return json.loads(self.facebook_cookie)
-            return self.facebook_cookie
+                cookies = json.loads(self.facebook_cookie)
+            else:
+                cookies = self.facebook_cookie
+            
+            # נרמול sameSite לכל cookie
+            for cookie in cookies:
+                if "sameSite" in cookie:
+                    cookie["sameSite"] = self._normalize_same_site(cookie["sameSite"])
+            
+            return cookies
         except:
             logger.error("Failed to parse Facebook cookie")
             return []
+    
+    def _get_cookie_string(self) -> str:
+        """קבלת cookie בפורמט string"""
+        try:
+            cookies = self._parse_cookie()
+            if cookies:
+                return "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+        except:
+            logger.error("Failed to convert cookie to string")
+        
+        return ""
     
     async def run_actor(
         self,
@@ -162,15 +211,18 @@ class ApifyService:
         self,
         group_urls: List[str],
         messages: List[str],
-        delay_seconds: int = 60
+        delay_seconds: int = 60,
+        use_proxy: bool = True
     ) -> Optional[Dict[str, Any]]:
         """
         פרסום לקבוצות פייסבוק
+        משתמש באקטור מותאם אישית אם מוגדר, אחרת בישן
         
         Args:
             group_urls: רשימת URLs של קבוצות
-            messages: רשימת הודעות (יבחר אקראית)
+            messages: רשימת הודעות
             delay_seconds: השהייה בין פוסטים
+            use_proxy: האם להשתמש בפרוקסי ישראלי (ברירת מחדל: כן)
             
         Returns:
             run info
@@ -179,17 +231,57 @@ class ApifyService:
             logger.error("🎭 ❌ Facebook cookie not configured")
             return None
         
+        cookie_array = self._parse_cookie()
+        
+        if not cookie_array:
+            logger.error("🎭 ❌ Failed to parse Facebook cookie as array")
+            return None
+        
+        logger.info(f"🎭 Posting to {len(group_urls)} groups with {len(cookie_array)} cookies (proxy: {use_proxy})")
+        logger.debug(f"🎭 Cookie names: {[c.get('name') for c in cookie_array]}")
+        
+        # ==== Custom Actor (preferred) ====
+        if self.use_custom_actor:
+            logger.info(f"🎭 Using CUSTOM actor: {self.fb_poster_custom_actor}")
+            input_data = {
+                "facebookCookies": cookie_array,
+                "groupUrls": group_urls,
+                "messages": messages,
+                "delayMinSeconds": max(delay_seconds, 300),
+                "delayMaxSeconds": max(delay_seconds * 3, 900),
+                "maxPostsPerRun": len(group_urls),
+            }
+            
+            return await self.run_actor(
+                actor_id=self.fb_poster_custom_actor,
+                input_data=input_data,
+                wait_for_finish=False
+            )
+        
+        # ==== Legacy Actor (bhansalisoft) ====
+        logger.info(f"🎭 Using LEGACY actor: {self.fb_poster_actor}")
         input_data = {
-            "groupUrls": group_urls,
-            "messages": messages,
-            "delay": delay_seconds,
-            "cookies": self._parse_cookie()
+            "Facebook_Profile_URL": group_urls,
+            "Message": messages,
+            "Delay": str(delay_seconds),
+            "Cookies": cookie_array
         }
+        
+        # הוספת פרוקסי ישראלי Residential למניעת חסימות
+        if use_proxy:
+            input_data["proxyConfiguration"] = {
+                "useApifyProxy": True,
+                "apifyProxyGroups": ["RESIDENTIAL"],
+                "apifyProxyCountry": "IL"
+            }
+            logger.info("🎭 🇮🇱 Using Israeli Residential Proxy")
+        
+        logger.info(f"🎭 Actor input: {len(group_urls)} groups, {len(messages)} messages, delay={delay_seconds}s")
         
         return await self.run_actor(
             actor_id=self.fb_poster_actor,
             input_data=input_data,
-            wait_for_finish=False  # לא ממתינים - זה יכול לקחת זמן
+            wait_for_finish=False
         )
     
     async def post_single(
@@ -353,6 +445,73 @@ class ApifyService:
             return None
         
         return await self.get_run_dataset(run_id)
+    
+    # ========== Facebook Comment Reply ==========
+    
+    async def reply_to_comment(
+        self,
+        post_url: str,
+        reply_message: str,
+        comment_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        שליחת תגובה לתגובה בפוסט פייסבוק
+        
+        Args:
+            post_url: URL הפוסט
+            reply_message: תוכן התגובה
+            comment_id: מזהה התגובה להגיב עליה (אופציונלי)
+            
+        Returns:
+            dict עם תוצאת הפעולה או None בשגיאה
+        """
+        if not self.has_facebook_cookie:
+            logger.error("🎭 ❌ Facebook cookie not configured for comment reply")
+            return None
+        
+        # בדיקה שה-Actor מוגדר
+        comment_reply_actor = settings.apify_fb_comment_reply_actor
+        if not comment_reply_actor:
+            logger.warning("🎭 ⚠️ Comment reply actor not configured - skipping")
+            return None
+        
+        input_data = {
+            "postUrl": post_url,
+            "replyMessage": reply_message,
+            "cookies": self._parse_cookie()
+        }
+        
+        if comment_id:
+            input_data["commentId"] = comment_id
+        
+        # הרצת ה-Actor והמתנה לסיום
+        run_info = await self.run_actor(
+            actor_id=comment_reply_actor,
+            input_data=input_data,
+            wait_for_finish=True,
+            timeout_secs=120
+        )
+        
+        if not run_info:
+            return None
+        
+        run_id = run_info.get("id")
+        if not run_id:
+            return None
+        
+        # קבלת התוצאות
+        results = await self.get_run_dataset(run_id)
+        
+        if results and len(results) > 0:
+            result = results[0]
+            if result.get("success"):
+                logger.info(f"🎭 ✅ Comment reply sent successfully")
+                return result
+            else:
+                logger.error(f"🎭 ❌ Comment reply failed: {result.get('error')}")
+                return result
+        
+        return None
     
     # ========== Utility Methods ==========
     

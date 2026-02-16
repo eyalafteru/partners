@@ -18,6 +18,22 @@ interface PostStrategy {
   created_at: string;
 }
 
+interface DebugPromptResult {
+  strategy_name: string;
+  system_prompt: string;
+  user_prompt: string;
+  post_template: string | null;
+  will_use_template: boolean;
+  final_output_preview: string | null;
+}
+
+interface GenerateResult {
+  strategy_name: string;
+  generated_content: string | null;
+  error: string | null;
+  used_ai: boolean;
+}
+
 // API Base
 const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost' 
   ? '/api/strategies' 
@@ -30,6 +46,9 @@ export default function PostStrategiesPage() {
   const [editingStrategy, setEditingStrategy] = useState<PostStrategy | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [previewResult, setPreviewResult] = useState<string | null>(null);
+  const [debugResult, setDebugResult] = useState<DebugPromptResult | null>(null);
+  const [generateResult, setGenerateResult] = useState<GenerateResult | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
   
   // Form state
   const [formData, setFormData] = useState({
@@ -136,6 +155,49 @@ export default function PostStrategiesPage() {
     }
   };
 
+  const handleDebug = async (strategyId: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/${strategyId}/debug-prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calculator_name: 'מחשבון משכנתא',
+          calculator_url: 'https://loan-israel.co.il/mashkanta/',
+          calculator_summary: 'מחשבון משכנתא חכם לחישוב החזר חודשי',
+          group_name: 'נדל"ן ומשכנתאות ישראל'
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to get debug info');
+      const data = await res.json();
+      setDebugResult(data);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleGenerateWithAI = async (strategyId: number) => {
+    setIsGenerating(true);
+    try {
+      const res = await fetch(`${API_BASE}/${strategyId}/generate-with-ai`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calculator_name: 'מחשבון משכנתא',
+          calculator_url: 'https://loan-israel.co.il/mashkanta/',
+          calculator_summary: 'מחשבון משכנתא חכם לחישוב החזר חודשי, ריביות, ולוח סילוקין',
+          group_name: 'נדל"ן ומשכנתאות ישראל'
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to generate with AI');
+      const data = await res.json();
+      setGenerateResult(data);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   const startEdit = (strategy: PostStrategy) => {
     setEditingStrategy(strategy);
     setFormData({
@@ -182,12 +244,99 @@ export default function PostStrategiesPage() {
       {previewResult && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-2xl">
-            <h3 className="font-bold text-lg mb-4">👀 תצוגה מקדימה</h3>
+            <h3 className="font-bold text-lg mb-4">👀 תצוגה מקדימה (מתבנית)</h3>
             <div className="bg-gray-50 p-4 rounded border whitespace-pre-wrap text-sm">
               {previewResult}
             </div>
             <button
               onClick={() => setPreviewResult(null)}
+              className="mt-4 px-4 py-2 bg-gray-200 rounded hover:bg-gray-300"
+            >
+              סגור
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Debug Modal */}
+      {debugResult && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
+          <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-4xl m-4 max-h-[90vh] overflow-y-auto">
+            <h3 className="font-bold text-lg mb-4">🔍 Debug: פרומפטים ל-{debugResult.strategy_name}</h3>
+            
+            <div className="space-y-4">
+              <div className="bg-yellow-50 border border-yellow-200 p-3 rounded">
+                <p className="text-sm font-semibold text-yellow-800 mb-1">
+                  {debugResult.will_use_template ? '📝 ישתמש בתבנית (לא AI)' : '🤖 ישתמש ב-AI'}
+                </p>
+              </div>
+              
+              <div>
+                <h4 className="font-semibold text-sm text-gray-700 mb-2">System Prompt (הנחיות למודל):</h4>
+                <pre className="bg-blue-50 p-3 rounded border border-blue-200 text-xs whitespace-pre-wrap font-mono">
+                  {debugResult.system_prompt}
+                </pre>
+              </div>
+              
+              <div>
+                <h4 className="font-semibold text-sm text-gray-700 mb-2">User Prompt (בקשה למודל):</h4>
+                <pre className="bg-green-50 p-3 rounded border border-green-200 text-xs whitespace-pre-wrap font-mono max-h-60 overflow-y-auto">
+                  {debugResult.user_prompt}
+                </pre>
+              </div>
+              
+              {debugResult.post_template && (
+                <div>
+                  <h4 className="font-semibold text-sm text-gray-700 mb-2">תבנית פוסט (אם יש - עוקפת את ה-AI!):</h4>
+                  <pre className="bg-purple-50 p-3 rounded border border-purple-200 text-xs whitespace-pre-wrap font-mono">
+                    {debugResult.post_template}
+                  </pre>
+                </div>
+              )}
+              
+              {debugResult.final_output_preview && (
+                <div>
+                  <h4 className="font-semibold text-sm text-gray-700 mb-2">תוצאה סופית (מתבנית):</h4>
+                  <pre className="bg-gray-100 p-3 rounded border text-xs whitespace-pre-wrap">
+                    {debugResult.final_output_preview}
+                  </pre>
+                </div>
+              )}
+            </div>
+            
+            <button
+              onClick={() => setDebugResult(null)}
+              className="mt-4 px-4 py-2 bg-gray-200 rounded hover:bg-gray-300"
+            >
+              סגור
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Generate Result Modal */}
+      {generateResult && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-3xl m-4">
+            <h3 className="font-bold text-lg mb-4">
+              🤖 תוצאת AI: {generateResult.strategy_name}
+            </h3>
+            
+            {generateResult.error ? (
+              <div className="bg-red-50 border border-red-200 p-4 rounded text-red-700">
+                ❌ שגיאה: {generateResult.error}
+              </div>
+            ) : (
+              <div className="bg-green-50 border border-green-200 p-4 rounded">
+                <h4 className="font-semibold text-green-800 mb-2">✅ פוסט נוצר בהצלחה:</h4>
+                <div className="bg-white p-4 rounded border whitespace-pre-wrap text-sm">
+                  {generateResult.generated_content}
+                </div>
+              </div>
+            )}
+            
+            <button
+              onClick={() => setGenerateResult(null)}
               className="mt-4 px-4 py-2 bg-gray-200 rounded hover:bg-gray-300"
             >
               סגור
@@ -204,6 +353,33 @@ export default function PostStrategiesPage() {
               {editingStrategy ? `✏️ עריכת: ${editingStrategy.name}` : '➕ אסטרטגיה חדשה'}
             </h3>
             <form onSubmit={editingStrategy ? handleUpdate : handleCreate} className="space-y-4">
+              {/* Helper: Available Variables */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <h4 className="font-semibold text-blue-800 mb-2">📝 משתנים דינמיים זמינים:</h4>
+                <p className="text-sm text-blue-700 mb-2">השתמש במשתנים הבאים ב-System Prompt ובתבנית הפוסט - הם יוחלפו אוטומטית:</p>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div className="bg-white rounded p-2 border border-blue-100">
+                    <code className="text-blue-600 font-mono">{'{group_name}'}</code>
+                    <span className="text-gray-600 mr-2"> - שם הקבוצה</span>
+                  </div>
+                  <div className="bg-white rounded p-2 border border-blue-100">
+                    <code className="text-blue-600 font-mono">{'{calculator_name}'}</code>
+                    <span className="text-gray-600 mr-2"> - שם המחשבון</span>
+                  </div>
+                  <div className="bg-white rounded p-2 border border-blue-100">
+                    <code className="text-blue-600 font-mono">{'{calculator_url}'}</code>
+                    <span className="text-gray-600 mr-2"> - קישור למחשבון</span>
+                  </div>
+                  <div className="bg-white rounded p-2 border border-blue-100">
+                    <code className="text-blue-600 font-mono">{'{calculator_summary}'}</code>
+                    <span className="text-gray-600 mr-2"> - תיאור המחשבון</span>
+                  </div>
+                </div>
+                <p className="text-xs text-blue-600 mt-2">
+                  💡 דוגמה: &quot;כתוב פוסט אישי לקבוצה {'{group_name}'} על המחשבון {'{calculator_name}'}&quot;
+                </p>
+              </div>
+
               <div className="grid grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-medium mb-1">שם</label>
@@ -250,23 +426,30 @@ export default function PostStrategiesPage() {
               </div>
               
               <div>
-                <label className="block text-sm font-medium mb-1">System Prompt (הנחיות ל-AI)</label>
+                <label className="block text-sm font-medium mb-1">
+                  System Prompt (הנחיות ל-AI) 
+                  <span className="text-blue-500 text-xs mr-2">תומך במשתנים דינמיים</span>
+                </label>
                 <textarea
                   value={formData.system_prompt}
                   onChange={(e) => setFormData({ ...formData, system_prompt: e.target.value })}
                   className="w-full border rounded px-3 py-2 font-mono text-sm"
                   rows={4}
-                  placeholder="אתה כותב פוסט שמדגיש..."
+                  placeholder={`אתה אייל עובדיה. כתוב פוסט אישי לקבוצה "{group_name}" על המחשבון {calculator_name}...`}
                 />
               </div>
               
               <div>
-                <label className="block text-sm font-medium mb-1">תבנית פוסט (משתנים: {'{calculator_name}'}, {'{calculator_url}'})</label>
+                <label className="block text-sm font-medium mb-1">
+                  תבנית פוסט / הנחיות נוספות
+                  <span className="text-blue-500 text-xs mr-2">תומך במשתנים: {'{group_name}'}, {'{calculator_name}'}, {'{calculator_url}'}, {'{calculator_summary}'}</span>
+                </label>
                 <textarea
                   value={formData.post_template}
                   onChange={(e) => setFormData({ ...formData, post_template: e.target.value })}
                   className="w-full border rounded px-3 py-2"
                   rows={6}
+                  placeholder="הנחיות נוספות לסגנון הפוסט..."
                 />
               </div>
               
@@ -309,9 +492,24 @@ export default function PostStrategiesPage() {
               </div>
               <div className="flex gap-1">
                 <button
+                  onClick={() => handleDebug(strategy.id)}
+                  className="p-1 text-purple-600 hover:bg-purple-50 rounded"
+                  title="🔍 Debug - ראה פרומפטים"
+                >
+                  🔍
+                </button>
+                <button
+                  onClick={() => handleGenerateWithAI(strategy.id)}
+                  disabled={isGenerating}
+                  className="p-1 text-green-600 hover:bg-green-50 rounded disabled:opacity-50"
+                  title="🤖 צור עם AI"
+                >
+                  {isGenerating ? '⏳' : '🤖'}
+                </button>
+                <button
                   onClick={() => handlePreview(strategy.id)}
                   className="p-1 text-blue-600 hover:bg-blue-50 rounded"
-                  title="תצוגה מקדימה"
+                  title="תצוגה מקדימה (תבנית)"
                 >
                   👁️
                 </button>
@@ -333,6 +531,24 @@ export default function PostStrategiesPage() {
             </div>
             
             <p className="text-sm text-gray-600 mt-2">{strategy.description}</p>
+            
+            {/* סימון תבנית vs AI */}
+            <div className="mt-2 flex gap-2 text-xs">
+              {strategy.post_template ? (
+                <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded">
+                  📝 תבנית קבועה
+                </span>
+              ) : (
+                <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded">
+                  🤖 AI דינמי
+                </span>
+              )}
+              {strategy.system_prompt && (
+                <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+                  💬 System Prompt
+                </span>
+              )}
+            </div>
             
             <div className="mt-3 flex items-center justify-between text-xs text-gray-500">
               <span>נעשה שימוש: {strategy.times_used} פעמים</span>

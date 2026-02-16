@@ -16,6 +16,7 @@ from app.models.reply_scenario import ReplyScenario
 from app.models.email_queue import EmailQueue
 from app.models.blacklist import Blacklist
 from app.models.post_strategy import PostStrategy
+from app.models.eyal_story import EyalStory
 from app.models.facebook_marketing import (
     FacebookGroup,
     FacebookPostTemplate,
@@ -44,6 +45,7 @@ __all__ = [
     "EmailQueue",
     "Blacklist",
     "PostStrategy",
+    "EyalStory",
     # Facebook Marketing
     "FacebookGroup",
     "FacebookPostTemplate",

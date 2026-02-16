@@ -1,0 +1,54 @@
+{
+  "title": "Facebook Group Poster Input",
+  "type": "object",
+  "schemaVersion": 1,
+  "required": ["facebookCookies", "groupUrls", "messages"],
+  "properties": {
+    "facebookCookies": {
+      "title": "Facebook Cookies",
+      "type": "array",
+      "description": "Facebook session cookies as JSON array (from browser cookie export plugin)",
+      "editor": "json"
+    },
+    "groupUrls": {
+      "title": "Group URLs",
+      "type": "array",
+      "description": "List of Facebook group URLs to post to",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      }
+    },
+    "messages": {
+      "title": "Messages",
+      "type": "array",
+      "description": "List of messages to post (one per group, cycled if fewer messages than groups)",
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      }
+    },
+    "delayMinSeconds": {
+      "title": "Min delay between posts (seconds)",
+      "type": "integer",
+      "description": "Minimum random delay between posting to different groups",
+      "default": 300,
+      "minimum": 30
+    },
+    "delayMaxSeconds": {
+      "title": "Max delay between posts (seconds)",
+      "type": "integer",
+      "description": "Maximum random delay between posting to different groups",
+      "default": 900,
+      "minimum": 60
+    },
+    "maxPostsPerRun": {
+      "title": "Max posts per run",
+      "type": "integer",
+      "description": "Maximum number of posts to make in a single run",
+      "default": 5,
+      "minimum": 1,
+      "maximum": 20
+    }
+  }
+}

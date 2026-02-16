@@ -122,6 +122,9 @@ class FacebookCampaign(Base):
     delay_between_posts = Column(Integer, default=60)  # דקות בין פוסטים
     max_posts_per_day = Column(Integer, default=10)
     
+    # === הגדרות מדיה ===
+    media_preference = Column(String(20), default="image")  # image, video, both, none
+    
     # קבוצות יעד (JSON array of group IDs)
     target_group_ids = Column(JSON, default=[])
     
@@ -183,6 +186,9 @@ class FacebookPost(Base):
     image_prompt = Column(Text)  # ה-prompt שנשלח ל-Replicate
     image_url = Column(String(500))  # URL של התמונה שנוצרה
     
+    # וידאו (YouTube)
+    youtube_url = Column(String(500), nullable=True)  # לינק לסרטון ביוטיוב
+    
     # סטטוס: draft, pending_approval, approved, publishing, published, failed, rejected
     status = Column(String(20), default="draft")
     rejection_reason = Column(Text)
@@ -190,6 +196,9 @@ class FacebookPost(Base):
     # Apify
     apify_run_id = Column(String(100))
     publish_error = Column(Text)
+    
+    # 🐞 DEBUG: הפרומפטים שנשלחו ל-AI (לצורך איתור בעיות)
+    debug_ai_prompt = Column(Text, nullable=True)  # הפרומפט המלא שנשלח ל-AI
     
     # סטטיסטיקות
     replies_count = Column(Integer, default=0)

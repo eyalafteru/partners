@@ -9,16 +9,20 @@ import asyncio
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from contextlib import asynccontextmanager
 from loguru import logger
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from app.config import settings
 from app.database import init_db, close_db
 
 # Import API routers
-from app.api import calculators, leads, scans, communication, prompts, stats, webhooks, templates, ai_reply, emails, tracking, outreach, blacklist, notifications, facebook_marketing, post_strategies
+from app.api import calculators, leads, scans, communication, prompts, stats, webhooks, templates, ai_reply, emails, tracking, outreach, blacklist, notifications, facebook_marketing, post_strategies, eyal_story
 from app.api.admin import database as admin_database, api_keys, auto_reply as admin_auto_reply, scenarios as admin_scenarios, business_classifier as admin_classifier
 
 
@@ -106,7 +110,26 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
-# CORS - אפשר גישה מה-Frontend
+# CORS Middleware for Chrome Extension (must be added BEFORE CORSMiddleware)
+class ChromeExtensionCORSMiddleware(BaseHTTPMiddleware):
+    """Allow CORS from any chrome-extension:// origin"""
+    async def dispatch(self, request: Request, call_next):
+        origin = request.headers.get("origin", "")
+        if origin.startswith("chrome-extension://"):
+            if request.method == "OPTIONS":
+                return Response(status_code=200, headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type",
+                    "Access-Control-Allow-Credentials": "true",
+                })
+            response = await call_next(request)
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            return response
+        return await call_next(request)
+
+# CORS - אפשר גישה מה-Frontend (added FIRST = innermost)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -119,6 +142,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Chrome Extension CORS (added LAST = outermost = runs FIRST)
+# This intercepts chrome-extension:// origins before CORSMiddleware rejects them
+app.add_middleware(ChromeExtensionCORSMiddleware)
+
+# Static files - קבצי וידאו וכו'
+static_dir = Path(__file__).parent.parent / "static"
+static_dir.mkdir(exist_ok=True)
+(static_dir / "videos").mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
 # ========== API Routes ==========
@@ -267,6 +300,13 @@ app.include_router(
     post_strategies.router,
     prefix="/api/strategies",
     tags=["Post Strategies"]
+)
+
+# Eyal Story - הסיפור של אייל לשימוש ב-AI
+app.include_router(
+    eyal_story.router,
+    prefix="/api/eyal-story",
+    tags=["Eyal Story"]
 )
 
 

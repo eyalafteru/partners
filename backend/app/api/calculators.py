@@ -37,6 +37,7 @@ class CalculatorUpdate(BaseModel):
     embed_code_template: Optional[str] = None
     category: Optional[str] = None
     is_active: Optional[bool] = None
+    demo_video_url: Optional[str] = None
 
 
 class CalculatorResponse(BaseModel):
@@ -53,9 +54,25 @@ class CalculatorResponse(BaseModel):
     ai_summary: Optional[str] = None
     scraped_content: Optional[str] = None
     scraped_at: Optional[datetime] = None
+    # Video demo
+    demo_video_url: Optional[str] = None
+    youtube_url: Optional[str] = None
     
     class Config:
         from_attributes = True
+
+
+class VideoUpdateRequest(BaseModel):
+    """סכמה לעדכון וידאו"""
+    demo_video_url: str
+
+
+class YouTubeUploadRequest(BaseModel):
+    """סכמה להעלאה ליוטיוב"""
+    title: Optional[str] = None  # אם לא סופק, ישתמש בשם המחשבון
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
+    privacy: str = "unlisted"  # public, unlisted, private
 
 
 # ========== API Endpoints ==========
@@ -107,6 +124,7 @@ async def get_calculator(
     """
     קבלת מחשבון לפי ID
     """
+    from loguru import logger
     result = await session.execute(
         select(Calculator).where(Calculator.id == calc_id)
     )
@@ -114,6 +132,11 @@ async def get_calculator(
     
     if not calculator:
         raise HTTPException(status_code=404, detail="מחשבון לא נמצא")
+    
+    # Force refresh from DB to get latest data
+    await session.refresh(calculator)
+    
+    logger.info(f"GET Calculator {calc_id}: youtube_url={calculator.youtube_url}, demo_video_url={calculator.demo_video_url}")
     
     return calculator
 
@@ -190,6 +213,258 @@ async def delete_calculator(
     await session.delete(calculator)
     
     return {"message": f"מחשבון {calc_id} נמחק בהצלחה"}
+
+
+# ========== Video Demo Endpoints ==========
+
+@router.put("/{calc_id}/video", response_model=CalculatorResponse)
+async def update_calculator_video(
+    calc_id: int,
+    data: VideoUpdateRequest,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    עדכון URL של וידאו דמו למחשבון
+    """
+    result = await session.execute(
+        select(Calculator).where(Calculator.id == calc_id)
+    )
+    calculator = result.scalar_one_or_none()
+    
+    if not calculator:
+        raise HTTPException(status_code=404, detail="מחשבון לא נמצא")
+    
+    calculator.demo_video_url = data.demo_video_url
+    await session.flush()
+    await session.refresh(calculator)
+    
+    return calculator
+
+
+@router.delete("/{calc_id}/video")
+async def delete_calculator_video(
+    calc_id: int,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    מחיקת וידאו דמו ממחשבון
+    """
+    result = await session.execute(
+        select(Calculator).where(Calculator.id == calc_id)
+    )
+    calculator = result.scalar_one_or_none()
+    
+    if not calculator:
+        raise HTTPException(status_code=404, detail="מחשבון לא נמצא")
+    
+    calculator.demo_video_url = None
+    await session.flush()
+    
+    return {"message": f"וידאו נמחק ממחשבון {calc_id}"}
+
+
+@router.post("/{calc_id}/upload-to-youtube", response_model=CalculatorResponse)
+async def upload_video_to_youtube(
+    calc_id: int,
+    data: YouTubeUploadRequest,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    העלאת וידאו הדמו של המחשבון ליוטיוב
+    """
+    import subprocess
+    import os
+    from pathlib import Path
+    from loguru import logger
+    
+    result = await session.execute(
+        select(Calculator).where(Calculator.id == calc_id)
+    )
+    calculator = result.scalar_one_or_none()
+    
+    if not calculator:
+        raise HTTPException(status_code=404, detail="מחשבון לא נמצא")
+    
+    if not calculator.demo_video_url:
+        raise HTTPException(status_code=400, detail="אין וידאו דמו למחשבון זה")
+    
+    # נתיב לקובץ הוידאו
+    video_path = Path("static") / calculator.demo_video_url.lstrip("/static/")
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="קובץ הוידאו לא נמצא")
+    
+    # הכנת פרמטרים להעלאה
+    title = data.title or f"מחשבון {calculator.name} - הדגמה"
+    description = data.description or f"""
+הדגמה של מחשבון {calculator.name}
+
+קישור למחשבון: {calculator.target_url}
+
+מחשבון זה עוזר לך לקבל הצעות מותאמות אישית!
+"""
+    tags = data.tags or ["מחשבון", "הלוואות", "מימון", calculator.name]
+    
+    # נתיב לסקריפט ההעלאה
+    youtube_script = Path.home() / ".claude" / "skills" / "youtube-uploader" / "scripts" / "youtube-upload.ts"
+    
+    if not youtube_script.exists():
+        raise HTTPException(
+            status_code=500, 
+            detail="סקריפט העלאה ליוטיוב לא נמצא. יש להתקין את youtube-uploader skill"
+        )
+    
+    try:
+        # בניית הפקודה
+        cmd = [
+            "npx", "ts-node", str(youtube_script),
+            "--video", str(video_path.absolute()),
+            "--title", title,
+            "--description", description,
+            "--tags", ",".join(tags),
+            "--privacy", data.privacy
+        ]
+        
+        logger.info(f"📺 Uploading video to YouTube: {calculator.name}")
+        
+        # הרצת הסקריפט
+        process = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,  # 10 דקות מקסימום להעלאה
+            cwd=str(youtube_script.parent)
+        )
+        
+        if process.returncode != 0:
+            logger.error(f"YouTube upload failed: {process.stderr}")
+            raise HTTPException(
+                status_code=500, 
+                detail=f"שגיאה בהעלאה ליוטיוב: {process.stderr[:500]}"
+            )
+        
+        # חילוץ ה-URL מהפלט
+        output = process.stdout
+        youtube_url = None
+        
+        # חיפוש URL ביוטיוב בפלט
+        import re
+        url_match = re.search(r'https://youtu\.be/[\w-]+|https://www\.youtube\.com/watch\?v=[\w-]+', output)
+        if url_match:
+            youtube_url = url_match.group(0)
+        
+        if youtube_url:
+            calculator.youtube_url = youtube_url
+            await session.flush()
+            await session.refresh(calculator)
+            logger.info(f"📺 ✅ Video uploaded to YouTube: {youtube_url}")
+        else:
+            logger.warning(f"📺 ⚠️ Could not extract YouTube URL from output: {output[:500]}")
+            raise HTTPException(
+                status_code=500,
+                detail="הוידאו הועלה אבל לא הצלחנו לחלץ את ה-URL"
+            )
+        
+        return calculator
+        
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="העלאה ליוטיוב ארכה יותר מדי זמן")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"YouTube upload error: {e}")
+        raise HTTPException(status_code=500, detail=f"שגיאה: {str(e)}")
+
+
+class VideoGenerateRequest(BaseModel):
+    """סכמה לייצור וידאו"""
+    url: str
+    with_captions: bool = False  # האם להוסיף כתוביות
+
+
+@router.post("/{calc_id}/generate-video", response_model=CalculatorResponse)
+async def generate_calculator_video(
+    calc_id: int,
+    data: VideoGenerateRequest,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """
+    ייצור וידאו דמו למחשבון באמצעות Playwright
+    """
+    import subprocess
+    import os
+    from pathlib import Path
+    from datetime import datetime
+    
+    result = await session.execute(
+        select(Calculator).where(Calculator.id == calc_id)
+    )
+    calculator = result.scalar_one_or_none()
+    
+    if not calculator:
+        raise HTTPException(status_code=404, detail="מחשבון לא נמצא")
+    
+    # יצירת תיקייה לוידאו אם לא קיימת
+    videos_dir = Path("static/videos")
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    
+    # שם קובץ ייחודי
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = calculator.name.replace(" ", "_").replace("/", "_")[:30]
+    output_filename = f"{safe_name}_{calc_id}_{timestamp}.webm"
+    output_path = videos_dir / output_filename
+    
+    # הרצת הסקריפט
+    script_path = Path(__file__).parent.parent.parent.parent / "scripts" / "generate_calculator_video.py"
+    
+    try:
+        # בניית הפקודה
+        cmd = [
+            "python", str(script_path),
+            "--url", data.url,
+            "--output", str(output_path)
+        ]
+        
+        # הוספת כתוביות אם נדרש
+        if data.with_captions:
+            cmd.extend(["--captions", "--calc-name", calculator.name])
+        
+        # הרצת הסקריפט כ-subprocess
+        process = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 דקות מקסימום
+        )
+        
+        if process.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"שגיאה ביצירת וידאו: {process.stderr}")
+        
+        # עדכון URL בדאטאבייס
+        video_url = f"/static/videos/{output_filename}"
+        calculator.demo_video_url = video_url
+        await session.flush()
+        await session.refresh(calculator)
+        
+        return calculator
+        
+    except subprocess.TimeoutExpired:
+        # בדוק אם הוידאו נוצר למרות ה-timeout
+        if output_path.exists() and output_path.stat().st_size > 0:
+            video_url = f"/static/videos/{output_filename}"
+            calculator.demo_video_url = video_url
+            await session.flush()
+            await session.refresh(calculator)
+            return calculator
+        raise HTTPException(status_code=500, detail="ייצור הוידאו ארך יותר מדי זמן")
+    except Exception as e:
+        # בדוק אם הוידאו נוצר למרות השגיאה
+        if output_path.exists() and output_path.stat().st_size > 0:
+            video_url = f"/static/videos/{output_filename}"
+            calculator.demo_video_url = video_url
+            await session.flush()
+            await session.refresh(calculator)
+            return calculator
+        raise HTTPException(status_code=500, detail=f"שגיאה: {str(e)}")
 
 
 # ========== Calculator Scanning Endpoints ==========
