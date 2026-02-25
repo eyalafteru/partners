@@ -2,6 +2,7 @@
 PartnerCalc OS - Main Application
 נקודת הכניסה הראשית של ה-API
 """
+import os
 import sys
 import asyncio
 
@@ -22,7 +23,7 @@ from app.config import settings
 from app.database import init_db, close_db
 
 # Import API routers
-from app.api import calculators, leads, scans, communication, prompts, stats, webhooks, templates, ai_reply, emails, tracking, outreach, blacklist, notifications, facebook_marketing, post_strategies, eyal_story
+from app.api import calculators, leads, scans, communication, prompts, stats, webhooks, templates, ai_reply, emails, tracking, outreach, blacklist, notifications, facebook_marketing, post_strategies, eyal_story, lead_hunter
 from app.api.admin import database as admin_database, api_keys, auto_reply as admin_auto_reply, scenarios as admin_scenarios, business_classifier as admin_classifier
 
 
@@ -33,6 +34,16 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     logger.info("🚀 PartnerCalc OS מתחיל...")
+    # בדיקה שהמפתח של Anthropic נטען (בלי להדפיס את המפתח)
+    env_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip().replace("\r", "")
+    ak = (settings.anthropic_api_key or "").strip()
+    if ak:
+        logger.info("🔑 ANTHROPIC_API_KEY: נטען (אורך={}, מתחיל ב-sk-ant={})", len(ak), ak.startswith("sk-ant"))
+    else:
+        if env_key:
+            logger.warning("🔑 ANTHROPIC_API_KEY: קיים ב-env (אורך={}) אבל לא נטען ל-settings. ודא ש-.env נמצא בתיקיית backend", len(env_key))
+        else:
+            logger.warning("🔑 ANTHROPIC_API_KEY: לא מוגדר - תגובות AI לא יעבדו. הוסף ב-partners/backend/.env")
     if settings.use_sqlite:
         logger.info("📊 משתמש ב-SQLite מקומי לפיתוח")
     else:
@@ -135,8 +146,12 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",  # Next.js dev
         "http://localhost:3001",  # Next.js dev (alternate port)
+        "http://localhost:3002",  # Next.js dev (alternate port)
+        "http://localhost:3003",  # Next.js dev (alternate port)
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002",
+        "http://127.0.0.1:3003",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -307,6 +322,13 @@ app.include_router(
     eyal_story.router,
     prefix="/api/eyal-story",
     tags=["Eyal Story"]
+)
+
+# Lead Hunter - קליטת פוסטים מפייסבוק וניהול לידים
+app.include_router(
+    lead_hunter.router,
+    prefix="/api/lead-hunter",
+    tags=["Lead Hunter"]
 )
 
 

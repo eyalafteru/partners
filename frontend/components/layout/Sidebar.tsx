@@ -29,6 +29,7 @@ const navigation = [
   { name: 'סריקות', href: '/scans', icon: Search },
   { divider: true, name: 'תקשורת' },
   { name: 'Facebook Marketing', href: '/facebook-marketing', icon: Facebook },
+  { name: 'Lead Hunter AI', href: '/lead-hunter', icon: Zap },
   { name: 'תבניות מייל', href: '/emails/templates', icon: FileText },
   { divider: true, name: 'ניהול' },
   { name: 'אסטרטגיות פוסטים', href: '/admin/post-strategies', icon: Sparkles },

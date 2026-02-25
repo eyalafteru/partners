@@ -3,8 +3,16 @@ PartnerCalc OS - Configuration
 הגדרות המערכת מקובץ .env
 """
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from functools import lru_cache
 from typing import Optional, Literal
+
+
+def _strip_key(v: str) -> str:
+    """ניקוי מפתח מ-.env: רווחים, \\n, \\r (חשוב ב-Windows)"""
+    if not v:
+        return ""
+    return v.strip().replace("\r", "").replace("\n", "")
 
 
 class Settings(BaseSettings):
@@ -38,6 +46,11 @@ class Settings(BaseSettings):
     
     # ========== AI - Anthropic Claude ==========
     anthropic_api_key: str = ""
+    
+    @field_validator("anthropic_api_key", mode="before")
+    @classmethod
+    def strip_anthropic_key(cls, v: str) -> str:
+        return _strip_key(v) if isinstance(v, str) else ""
     
     # ========== AI - Default Model ==========
     # Options: "gpt-4o-mini", "gpt-4o", "claude-sonnet-4", "claude-sonnet-4-5"
@@ -92,6 +105,7 @@ class Settings(BaseSettings):
     facebook_cookie: str = ""  # JSON cookie from browser extension
     facebook_cookie_updated_at: str = ""  # Timestamp of last cookie update
     facebook_access_token: str = ""  # Facebook Graph API access token
+    fb_own_profile_names: str = ""  # Comma-separated names to skip in comment sync (e.g. "Eyal Ovadia")
     
     # ========== Facebook - Anti-Spam Settings ==========
     fb_max_posts_per_day: int = 100  # מקסימום פוסטים ליום - מבוטל לבדיקות

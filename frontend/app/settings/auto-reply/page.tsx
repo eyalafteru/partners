@@ -2,7 +2,9 @@
 
 import { useState, useEffect } from 'react';
 
-const API_URL = '';
+const API_URL = typeof window !== 'undefined' && window.location.hostname === 'localhost' 
+  ? 'http://localhost:8001' 
+  : '';
 
 interface AutoReplySettings {
   id: number;
@@ -42,7 +44,7 @@ export default function AutoReplySettingsPage() {
     setLoading(true);
     try {
       // Load settings
-      const settingsRes = await fetch(`${API_URL}/api/admin/auto-reply`);
+      const settingsRes = await fetch(`${API_URL}/api/admin/auto-reply/settings`);
       if (settingsRes.ok) {
         const data = await settingsRes.json();
         setSettings(data);
@@ -65,7 +67,7 @@ export default function AutoReplySettingsPage() {
     
     setSaving(true);
     try {
-      const response = await fetch(`${API_URL}/api/admin/auto-reply`, {
+      const response = await fetch(`${API_URL}/api/admin/auto-reply/settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings)

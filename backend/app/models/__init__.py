@@ -26,6 +26,7 @@ from app.models.facebook_marketing import (
     FacebookConversation,
     FacebookMessage,
 )
+from app.models.lead_hunter import LeadCategory, LeadActor, LeadPost, AIFeedback
 
 __all__ = [
     "Calculator",
@@ -54,4 +55,9 @@ __all__ = [
     "FacebookReply",
     "FacebookConversation",
     "FacebookMessage",
+    # Lead Hunter
+    "LeadCategory",
+    "LeadActor",
+    "LeadPost",
+    "AIFeedback",
 ]
