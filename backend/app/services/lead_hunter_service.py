@@ -208,16 +208,16 @@ async def send_lead_notification(
     result1 = await wa.send_to_phone(category.whatsapp_phone, msg1)
 
     # הודעה 2 - תגובה מוצעת (רק אם יש)
-    result2 = {"success": True}
     if post.ai_reply:
         msg2 = f"💬 תגובה מוצעת:\n{post.ai_reply}"
-        result2 = await wa.send_to_phone(category.whatsapp_phone, msg2)
+        await wa.send_to_phone(category.whatsapp_phone, msg2)
 
-    success = result1.get("success", False)
+    success = result1.get("success", False) if isinstance(result1, dict) else bool(result1)
     if success:
         logger.info(f"📱 ✅ WhatsApp sent for post {post.id} to {category.whatsapp_phone}")
     else:
-        logger.error(f"📱 ❌ WhatsApp failed for post {post.id}: {result1.get('error')}")
+        error_info = result1.get("error", "unknown") if isinstance(result1, dict) else "failed"
+        logger.error(f"📱 ❌ WhatsApp failed for post {post.id}: {error_info}")
 
     return success
 
