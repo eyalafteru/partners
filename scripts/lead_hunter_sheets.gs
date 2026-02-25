@@ -20,7 +20,7 @@
 
 const BACKEND_URL = "https://partners.ppcmedia.co.il/api/lead-hunter/ingest";
 const INGEST_TOKEN = "lead-hunter-secret-2024";
-const SHEET_NAME = "all_posts";
+const SHEET_NAME = "users_userpost";
 const SENT_COLUMN = 8;       // עמודה H
 const START_ROW = 171;       // מתחיל מ-171 (שורות 1-170 הן נתונים ישנים)
 const BATCH_SIZE = 20;       // כמה שורות לשלוח בכל ריצה

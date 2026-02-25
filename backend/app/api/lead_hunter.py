@@ -247,6 +247,7 @@ async def get_post(post_id: int, session: AsyncSession = Depends(get_async_sessi
 async def update_post(
     post_id: int,
     payload: PostStatusUpdate,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_async_session),
 ):
     """עדכון סטטוס / קטגוריה / סימון תגובה"""
@@ -256,6 +257,7 @@ async def update_post(
         raise HTTPException(status_code=404, detail="Post not found")
 
     old_category_id = post.category_id
+    category_changed = False
 
     if payload.status is not None:
         post.status = payload.status
@@ -267,7 +269,7 @@ async def update_post(
             if post.status == "notified":
                 post.status = "replied"
 
-    # תיקון קטגוריה ידני → שמור feedback
+    # תיקון קטגוריה ידני → שמור feedback + ייצור תגובה חדשה
     if payload.category_id is not None and payload.category_id != old_category_id:
         feedback = AIFeedback(
             post_id=post.id,
@@ -278,9 +280,49 @@ async def update_post(
         )
         session.add(feedback)
         post.category_id = payload.category_id
+        post.status = "classified"
+        category_changed = True
 
     await session.commit()
+
+    if category_changed:
+        background_tasks.add_task(
+            _generate_reply_after_category_change, post_id, payload.category_id
+        )
+
     return {"success": True, "post_id": post.id, "status": post.status}
+
+
+async def _generate_reply_after_category_change(post_id: int, new_category_id: int):
+    """Background: ייצור תגובה אוטומטית אחרי שינוי קטגוריה ידני"""
+    from app.services.lead_hunter_service import generate_reply_with_ai
+    from app.database import AsyncSessionLocal as async_session_factory
+
+    try:
+        async with async_session_factory() as session:
+            post = (await session.execute(
+                select(LeadPost).where(LeadPost.id == post_id)
+            )).scalar_one_or_none()
+            if not post:
+                return
+
+            category = (await session.execute(
+                select(LeadCategory).where(LeadCategory.id == new_category_id)
+            )).scalar_one_or_none()
+            if not category or not category.reply_prompt:
+                return
+
+            actor = (await session.execute(
+                select(LeadActor).where(LeadActor.id == post.actor_id)
+            )).scalar_one_or_none()
+            actor_name = actor.actor_name if actor else ""
+
+            new_reply = await generate_reply_with_ai(post.description, category, actor_name)
+            post.ai_reply = new_reply
+            await session.commit()
+            logger.info(f"Auto-generated reply for post {post_id} after category change")
+    except Exception as e:
+        logger.error(f"Failed to generate reply for post {post_id}: {e}")
 
 
 @router.post("/posts/{post_id}/ignore")
