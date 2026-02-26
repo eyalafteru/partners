@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+const API = typeof window !== 'undefined' && window.location.hostname !== 'localhost' ? '' : 'http://localhost:8001';
 
 // ============================================================
 //  Types
