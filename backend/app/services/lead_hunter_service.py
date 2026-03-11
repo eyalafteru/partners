@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.config import settings
-from app.models.lead_hunter import LeadCategory, LeadActor, LeadPost, AIFeedback
+from app.models.lead_hunter import LeadCategory, LeadActor, LeadPost, AIFeedback, LeadArea, VALID_AREAS
 from app.services.whatsapp_service import WhatsAppService
 
 
@@ -195,10 +195,11 @@ async def send_lead_notification(
 
     actor_label = actor.actor_name if actor else "לא ידוע"
     post_count_note = f" ⚠️ ({actor.post_count} פוסטים במערכת)" if actor and actor.post_count > 1 else ""
+    area_note = f" | 📍 {post.area}" if post.area and post.area != "לא ידוע" else ""
 
     # הודעה 1 - פרטי הליד
     msg1 = (
-        f"🔔 ליד חדש | {category.name}\n"
+        f"🔔 ליד חדש | {category.name}{area_note}\n"
         f"👤 {actor_label}{post_count_note}\n"
         f"📝 {_truncate(post.description, 150)}\n"
         f"📍 {post.group_name or 'קבוצה לא ידועה'}\n"
@@ -296,10 +297,11 @@ async def classify_and_notify_background(
     actor_id: int,
     description: str,
     actor_name: str,
+    group_name: str = "",
     skip_notify: bool = False,
 ) -> None:
     """
-    רץ ב-background: AI classification + reply generation + WhatsApp.
+    רץ ב-background: AI classification + area detection + reply generation + WhatsApp.
     """
     from app.database import AsyncSessionLocal
 
@@ -315,29 +317,41 @@ async def classify_and_notify_background(
                 logger.error(f"❌ Background task: post {post_id} or actor {actor_id} not found")
                 return
 
-            # טעינת קטגוריות + feedback
+            # טעינת קטגוריות + feedback + הגדרות אזורים
             cats_result = await session.execute(
                 select(LeadCategory).where(LeadCategory.is_active == True)
             )
             categories = list(cats_result.scalars().all())
             feedback_examples = await _get_recent_feedback_examples(session)
 
-            # AI classification עם timeout
+            areas_result = await session.execute(select(LeadArea))
+            areas_map = {a.name: a for a in areas_result.scalars().all()}
+
+            # AI classification + area detection במקביל
             import asyncio
             try:
-                classification = await asyncio.wait_for(
-                    classify_post_with_ai(description, categories, feedback_examples),
+                classification, detected_area = await asyncio.wait_for(
+                    asyncio.gather(
+                        classify_post_with_ai(description, categories, feedback_examples),
+                        detect_area_with_ai(description, group_name),
+                    ),
                     timeout=60.0,
                 )
             except asyncio.TimeoutError:
-                logger.warning(f"⏱️ AI classification timed out for post {post_id}")
+                logger.warning(f"⏱️ AI timed out for post {post_id}")
                 classification = {"category_id": None, "confidence": 0.0, "reasoning": "timeout"}
+                detected_area = "לא ידוע"
 
             cat_id = classification.get("category_id")
             confidence = classification.get("confidence", 0.0)
             reasoning = classification.get("reasoning", "")
 
-            logger.info(f"🤖 AI classified post {post_id} → category={cat_id}, confidence={confidence:.2f}")
+            logger.info(f"🤖 AI classified post {post_id} → category={cat_id}, area={detected_area}, confidence={confidence:.2f}")
+
+            # הגדרות אזור
+            area_config = areas_map.get(detected_area)
+            area_reply_enabled = area_config.is_reply_enabled if area_config else True
+            area_whatsapp_enabled = area_config.is_whatsapp_enabled if area_config else True
 
             matched_category = None
             if cat_id and cat_id > 0:
@@ -346,9 +360,9 @@ async def classify_and_notify_background(
                         matched_category = c
                         break
 
-            # AI reply
+            # AI reply - רק אם האזור מאפשר
             ai_reply = ""
-            if matched_category and matched_category.is_alert_worthy:
+            if matched_category and matched_category.is_alert_worthy and area_reply_enabled:
                 try:
                     ai_reply = await asyncio.wait_for(
                         generate_reply_with_ai(description, matched_category, actor_name),
@@ -356,32 +370,85 @@ async def classify_and_notify_background(
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"⏱️ AI reply generation timed out for post {post_id}")
+            elif matched_category and matched_category.is_alert_worthy and not area_reply_enabled:
+                logger.info(f"📍 Skipping reply for post {post_id} - area '{detected_area}' has reply disabled")
 
             # עדכון post
             post.category_id = cat_id if cat_id and cat_id > 0 else None
             post.ai_confidence = confidence
             post.ai_reasoning = reasoning
             post.ai_reply = ai_reply
+            post.area = detected_area
             post.status = "classified"
 
             now = datetime.utcnow()
 
-            # WhatsApp notification
-            if not skip_notify and matched_category and matched_category.is_alert_worthy:
+            # WhatsApp notification - רק אם האזור מאפשר
+            if not skip_notify and matched_category and matched_category.is_alert_worthy and area_whatsapp_enabled:
                 success = await send_lead_notification(post, matched_category, actor)
                 if success:
                     post.whatsapp_sent = True
                     post.whatsapp_sent_at = now
                     post.status = "notified"
+            elif matched_category and matched_category.is_alert_worthy and not area_whatsapp_enabled:
+                logger.info(f"📍 Skipping WhatsApp for post {post_id} - area '{detected_area}' has WhatsApp disabled")
             else:
                 if not cat_id or cat_id == 0:
                     post.status = "ignored"
 
             await session.commit()
-            logger.info(f"✅ Background: Post {post_id} classified → status={post.status}, category={cat_id}")
+            logger.info(f"✅ Background: Post {post_id} classified → status={post.status}, category={cat_id}, area={detected_area}")
 
         except Exception as e:
             logger.error(f"❌ Background classification failed for post {post_id}: {e}")
+
+
+async def detect_area_with_ai(description: str, group_name: str = "") -> str:
+    """
+    מזהה אזור גיאוגרפי מתוך טקסט הפוסט.
+    מחזיר אחד מהאזורים: מרכז / שרון / שפלה / ירושלים / צפון / דרום / לא ידוע
+    """
+    areas_list = ", ".join(VALID_AREAS[:-1])  # ללא "לא ידוע"
+    prompt = f"""זהה את האזור הגיאוגרפי בישראל שאליו מתייחס הפוסט הבא.
+אזורים אפשריים: {areas_list}
+אם לא ניתן לזהות אזור ברור - החזר "לא ידוע".
+
+קבוצה: {group_name or ''}
+פוסט: \"\"\"{description[:800]}\"\"\"
+
+ענה במילה אחת בלבד - שם האזור."""
+
+    try:
+        if settings.anthropic_api_key:
+            import anthropic
+            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            response = await client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=20,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = response.content[0].text.strip().strip('"').strip("'")
+        elif settings.openai_api_key:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=settings.openai_api_key)
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                max_tokens=20,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = response.choices[0].message.content.strip().strip('"').strip("'")
+        else:
+            return "לא ידוע"
+
+        # ודא שהתשובה חוקית
+        for area in VALID_AREAS:
+            if area in raw:
+                return area
+        return "לא ידוע"
+
+    except Exception as e:
+        logger.error(f"❌ Area detection failed: {e}")
+        return "לא ידוע"
 
 
 async def _get_recent_feedback_examples(session: AsyncSession) -> list[dict]:

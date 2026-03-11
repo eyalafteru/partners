@@ -8,6 +8,29 @@ from sqlalchemy.orm import relationship
 
 from app.database import Base
 
+VALID_AREAS = ["מרכז", "שרון", "שפלה", "ירושלים", "צפון", "דרום", "לא ידוע"]
+
+
+class LeadArea(Base):
+    """
+    הגדרות לפי אזור גיאוגרפי - שליטה על תגובות AI והתראות WhatsApp
+    """
+    __tablename__ = "lead_areas"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), unique=True, nullable=False)
+
+    # שליטה על מה המערכת עושה לפוסטים מאזור זה
+    is_reply_enabled = Column(Boolean, default=True)       # ייצר תגובת AI
+    is_whatsapp_enabled = Column(Boolean, default=True)    # שלח התראת WhatsApp
+    is_visible = Column(Boolean, default=True)             # הצג בדשבורד
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    def __repr__(self):
+        return f"<LeadArea(id={self.id}, name='{self.name}')>"
+
 
 class LeadCategory(Base):
     """
@@ -124,6 +147,9 @@ class LeadPost(Base):
     whatsapp_sent_at = Column(DateTime(timezone=True))
     whatsapp_replied = Column(Boolean, default=False)
     whatsapp_replied_at = Column(DateTime(timezone=True))
+
+    # אזור גיאוגרפי שזוהה על ידי AI
+    area = Column(String(50), nullable=True)
 
     # תשתית לתגובה אוטומטית עתידית
     auto_reply_enabled = Column(Boolean, default=False)

@@ -28,6 +28,7 @@ interface Post {
   posted_at: string | null;
   group_name: string | null;
   group_url: string | null;
+  area: string | null;
   status: string;
   ai_reply: string | null;
   ai_confidence: number | null;
@@ -39,6 +40,14 @@ interface Post {
   created_at: string | null;
   actor: Actor | null;
   category: Category | null;
+}
+
+interface LeadArea {
+  id: number;
+  name: string;
+  is_reply_enabled: boolean;
+  is_whatsapp_enabled: boolean;
+  is_visible: boolean;
 }
 
 interface Stats {
@@ -93,12 +102,14 @@ export default function LeadHunterPage() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [categories, setCategories] = useState<FullCategory[]>([]);
+  const [areas, setAreas] = useState<LeadArea[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
 
   // Filters
   const [filterStatus, setFilterStatus] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
+  const [filterArea, setFilterArea] = useState('');
   const [filterReplied, setFilterReplied] = useState('');
   const [offset, setOffset] = useState(0);
   const LIMIT = 50;
@@ -106,10 +117,11 @@ export default function LeadHunterPage() {
   // UI State
   const [expandedPost, setExpandedPost] = useState<number | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<'posts' | 'categories'>('posts');
+  const [activeTab, setActiveTab] = useState<'posts' | 'categories' | 'areas'>('posts');
   const [editingCategory, setEditingCategory] = useState<FullCategory | null>(null);
   const [savingCategory, setSavingCategory] = useState(false);
   const [regenerating, setRegenerating] = useState<number | null>(null);
+  const [savingArea, setSavingArea] = useState<number | null>(null);
 
   // ============================================================
   //  Data fetching
@@ -129,12 +141,20 @@ export default function LeadHunterPage() {
     } catch {}
   }, []);
 
+  const fetchAreas = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/lead-hunter/areas`);
+      if (res.ok) setAreas(await res.json());
+    } catch {}
+  }, []);
+
   const fetchPosts = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
       if (filterStatus) params.set('status', filterStatus);
       if (filterCategory) params.set('category_id', filterCategory);
+      if (filterArea) params.set('area', filterArea);
       if (filterReplied === 'replied') params.set('whatsapp_replied', 'true');
       if (filterReplied === 'pending') params.set('whatsapp_replied', 'false');
       params.set('limit', String(LIMIT));
@@ -149,12 +169,13 @@ export default function LeadHunterPage() {
     } finally {
       setLoading(false);
     }
-  }, [filterStatus, filterCategory, filterReplied, offset]);
+  }, [filterStatus, filterCategory, filterArea, filterReplied, offset]);
 
   useEffect(() => {
     fetchStats();
     fetchCategories();
-  }, [fetchStats, fetchCategories]);
+    fetchAreas();
+  }, [fetchStats, fetchCategories, fetchAreas]);
 
   useEffect(() => {
     fetchPosts();
@@ -213,6 +234,20 @@ export default function LeadHunterPage() {
       fetchPosts();
     } finally {
       setRegenerating(null);
+    }
+  };
+
+  const updateArea = async (areaId: number, field: keyof LeadArea, value: boolean) => {
+    setSavingArea(areaId);
+    try {
+      await fetch(`${API}/api/lead-hunter/areas/${areaId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: value }),
+      });
+      setAreas((prev) => prev.map((a) => a.id === areaId ? { ...a, [field]: value } : a));
+    } finally {
+      setSavingArea(null);
     }
   };
 
@@ -286,6 +321,14 @@ export default function LeadHunterPage() {
         >
           🏷️ קטגוריות
         </button>
+        <button
+          onClick={() => setActiveTab('areas')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            activeTab === 'areas' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+          }`}
+        >
+          🗺️ אזורים
+        </button>
       </div>
 
       {/* ========== Posts Tab ========== */}
@@ -312,6 +355,17 @@ export default function LeadHunterPage() {
               <option value="">כל הקטגוריות</option>
               {categories.map((c) => (
                 <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+
+            <select
+              value={filterArea}
+              onChange={(e) => { setFilterArea(e.target.value); setOffset(0); }}
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="">כל האזורים</option>
+              {areas.map((a) => (
+                <option key={a.id} value={a.name}>{a.name}</option>
               ))}
             </select>
 
@@ -367,6 +421,11 @@ export default function LeadHunterPage() {
                           {post.category && (
                             <span className="bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded-full">
                               {post.category.name}
+                            </span>
+                          )}
+                          {post.area && post.area !== 'לא ידוע' && (
+                            <span className="bg-emerald-50 text-emerald-700 text-xs px-2 py-0.5 rounded-full">
+                              🗺️ {post.area}
                             </span>
                           )}
                         </div>
@@ -537,6 +596,54 @@ export default function LeadHunterPage() {
             </div>
           )}
         </>
+      )}
+
+      {/* ========== Areas Tab ========== */}
+      {activeTab === 'areas' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+            <p className="text-sm text-gray-500">שליטה על מה שה-AI עושה עם פוסטים מכל אזור</p>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100">
+                <th className="text-right px-4 py-3 font-medium text-gray-700">אזור</th>
+                <th className="text-center px-4 py-3 font-medium text-gray-700">ייצר תגובת AI</th>
+                <th className="text-center px-4 py-3 font-medium text-gray-700">שלח WhatsApp</th>
+                <th className="text-center px-4 py-3 font-medium text-gray-700">הצג בדשבורד</th>
+              </tr>
+            </thead>
+            <tbody>
+              {areas.map((area) => (
+                <tr key={area.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                  <td className="px-4 py-3 font-medium text-gray-800">🗺️ {area.name}</td>
+                  {(['is_reply_enabled', 'is_whatsapp_enabled', 'is_visible'] as const).map((field) => (
+                    <td key={field} className="px-4 py-3 text-center">
+                      <button
+                        onClick={() => updateArea(area.id, field, !area[field])}
+                        disabled={savingArea === area.id}
+                        className={`w-12 h-6 rounded-full transition-colors relative disabled:opacity-50 ${
+                          area[field] ? 'bg-green-500' : 'bg-gray-200'
+                        }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${
+                            area[field] ? 'right-0.5' : 'left-0.5'
+                          }`}
+                        />
+                      </button>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 text-xs text-gray-400 space-y-1">
+            <p>• <strong>ייצר תגובת AI</strong> - האם לייצר תגובה מוצעת לפוסטים מאזור זה</p>
+            <p>• <strong>שלח WhatsApp</strong> - האם לשלוח התראת WhatsApp על פוסטים מאזור זה</p>
+            <p>• <strong>הצג בדשבורד</strong> - האם לכלול פוסטים מאזור זה בתצוגת הדשבורד (הסינון בלבד, לא מוחק)</p>
+          </div>
+        </div>
       )}
 
       {/* ========== Categories Tab ========== */}

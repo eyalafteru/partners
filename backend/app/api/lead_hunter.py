@@ -12,7 +12,7 @@ from loguru import logger
 
 from app.database import get_async_session
 from app.config import settings
-from app.models.lead_hunter import LeadCategory, LeadActor, LeadPost, AIFeedback
+from app.models.lead_hunter import LeadCategory, LeadActor, LeadPost, AIFeedback, LeadArea, VALID_AREAS
 from app.services.lead_hunter_service import process_ingest, classify_and_notify_background
 
 router = APIRouter()
@@ -66,6 +66,12 @@ class RegenerateReplyRequest(BaseModel):
     pass
 
 
+class AreaUpdate(BaseModel):
+    is_reply_enabled: Optional[bool] = None
+    is_whatsapp_enabled: Optional[bool] = None
+    is_visible: Optional[bool] = None
+
+
 # ============================================================
 #  Ingest Endpoint (נקרא מ-Google Apps Script)
 # ============================================================
@@ -116,6 +122,7 @@ async def ingest_post(
             actor_id=result["actor_id"],
             description=payload.description,
             actor_name=payload.actor_name or "לא ידוע",
+            group_name=payload.group_name or "",
             skip_notify=skip_notify,
         )
 
@@ -130,6 +137,7 @@ async def ingest_post(
 async def get_posts(
     status: Optional[str] = Query(None),
     category_id: Optional[int] = Query(None),
+    area: Optional[str] = Query(None),
     whatsapp_sent: Optional[bool] = Query(None),
     whatsapp_replied: Optional[bool] = Query(None),
     limit: int = Query(50, le=200),
@@ -148,6 +156,8 @@ async def get_posts(
         q = q.where(LeadPost.status == status)
     if category_id is not None:
         q = q.where(LeadPost.category_id == category_id)
+    if area is not None:
+        q = q.where(LeadPost.area == area)
     if whatsapp_sent is not None:
         q = q.where(LeadPost.whatsapp_sent == whatsapp_sent)
     if whatsapp_replied is not None:
@@ -159,6 +169,8 @@ async def get_posts(
         count_q = count_q.where(LeadPost.status == status)
     if category_id is not None:
         count_q = count_q.where(LeadPost.category_id == category_id)
+    if area is not None:
+        count_q = count_q.where(LeadPost.area == area)
 
     total_result = await session.execute(count_q)
     total = total_result.scalar()
@@ -176,6 +188,7 @@ async def get_posts(
             "posted_at": post.posted_at.isoformat() if post.posted_at else None,
             "group_name": post.group_name,
             "group_url": post.group_url,
+            "area": post.area,
             "status": post.status,
             "ai_reply": post.ai_reply,
             "ai_confidence": post.ai_confidence,
@@ -221,6 +234,7 @@ async def get_post(post_id: int, session: AsyncSession = Depends(get_async_sessi
         "posted_at": post.posted_at.isoformat() if post.posted_at else None,
         "group_name": post.group_name,
         "group_url": post.group_url,
+        "area": post.area,
         "status": post.status,
         "ai_reply": post.ai_reply,
         "ai_confidence": post.ai_confidence,
@@ -421,6 +435,46 @@ async def update_category(
 
     for field, value in payload.model_dump(exclude_none=True).items():
         setattr(category, field, value)
+
+    await session.commit()
+    return {"success": True}
+
+
+# ============================================================
+#  Areas
+# ============================================================
+
+@router.get("/areas")
+async def get_areas(session: AsyncSession = Depends(get_async_session)):
+    """רשימת אזורים גיאוגרפיים עם הגדרותיהם"""
+    result = await session.execute(select(LeadArea).order_by(LeadArea.id))
+    areas = result.scalars().all()
+    return [
+        {
+            "id": a.id,
+            "name": a.name,
+            "is_reply_enabled": a.is_reply_enabled,
+            "is_whatsapp_enabled": a.is_whatsapp_enabled,
+            "is_visible": a.is_visible,
+        }
+        for a in areas
+    ]
+
+
+@router.put("/areas/{area_id}")
+async def update_area(
+    area_id: int,
+    payload: AreaUpdate,
+    session: AsyncSession = Depends(get_async_session),
+):
+    """עדכון הגדרות אזור"""
+    result = await session.execute(select(LeadArea).where(LeadArea.id == area_id))
+    area = result.scalar_one_or_none()
+    if not area:
+        raise HTTPException(status_code=404, detail="Area not found")
+
+    for field, value in payload.model_dump(exclude_none=True).items():
+        setattr(area, field, value)
 
     await session.commit()
     return {"success": True}
