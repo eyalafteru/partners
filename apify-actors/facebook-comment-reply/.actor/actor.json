@@ -2,11 +2,14 @@
   "actorSpecification": 1,
   "name": "facebook-comment-reply",
   "title": "Facebook Comment Reply",
-  "description": "Reply to comments on Facebook posts using Playwright automation",
-  "version": "1.0.0",
+  "description": "Reply to comments on Facebook posts using Playwright browser automation",
+  "version": "1.0",
+  "dockerfile": "../Dockerfile",
   "input": {
+    "title": "Facebook Comment Actor Input",
     "type": "object",
     "schemaVersion": 1,
+    "required": ["postUrl", "cookies"],
     "properties": {
       "postUrl": {
         "title": "Post URL",
@@ -14,22 +17,28 @@
         "description": "URL of the Facebook post",
         "editor": "textfield"
       },
-      "commentId": {
-        "title": "Comment ID",
+      "mode": {
+        "title": "Mode",
         "type": "string",
-        "description": "ID of the comment to reply to",
+        "description": "scrape = extract comments, reply = post a comment. Auto-detected if empty.",
+        "editor": "textfield"
+      },
+      "commentId": {
+        "title": "Comment ID (reply mode)",
+        "type": "string",
+        "description": "ID of a specific comment to reply to",
         "editor": "textfield"
       },
       "replyMessage": {
-        "title": "Reply Message",
+        "title": "Reply Message (reply mode)",
         "type": "string",
-        "description": "The message to reply with",
+        "description": "The text to post as a comment/reply. If empty, switches to scrape mode.",
         "editor": "textarea"
       },
       "cookies": {
         "title": "Facebook Cookies",
         "type": "array",
-        "description": "Facebook session cookies for authentication",
+        "description": "Facebook session cookies as JSON array",
         "editor": "json"
       },
       "proxyConfiguration": {
@@ -37,21 +46,6 @@
         "type": "object",
         "description": "Optional proxy settings",
         "editor": "json"
-      }
-    },
-    "required": ["postUrl", "replyMessage", "cookies"]
-  },
-  "output": {
-    "type": "object",
-    "properties": {
-      "success": {
-        "type": "boolean"
-      },
-      "commentId": {
-        "type": "string"
-      },
-      "error": {
-        "type": "string"
       }
     }
   }

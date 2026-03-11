@@ -1,23 +1,15 @@
 {
-  "name": "facebook-comment-reply-actor",
+  "name": "facebook-comment-reply",
   "version": "1.0.0",
-  "description": "Apify Actor to reply to Facebook comments on posts",
-  "main": "src/main.ts",
+  "description": "Reply to Facebook comments using Playwright browser automation",
+  "main": "main.js",
   "scripts": {
-    "start": "apify-ts run",
-    "build": "tsc",
-    "test": "jest"
+    "start": "node main.js"
   },
   "dependencies": {
-    "apify": "^3.0.0",
-    "playwright": "^1.40.0",
-    "playwright-core": "^1.40.0",
-    "tslib": "^2.6.2"
+    "apify": "^3.1.0",
+    "playwright": "^1.40.0"
   },
-  "devDependencies": {
-    "@types/node": "^20.10.0",
-    "typescript": "^5.3.0"
-  },
-  "author": "PartnerCalc",
+  "author": "PartnerCalc OS",
   "license": "ISC"
 }

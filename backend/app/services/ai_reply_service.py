@@ -39,6 +39,10 @@ Instructions:
 5. If they want to unsubscribe, be polite and confirm
 6. Don't make promises you can't keep
 7. Be helpful and solution-oriented
+8. IMPORTANT: Use gender-neutral Hebrew - suitable for both men and women.
+   Use passive/impersonal forms instead of gendered second person.
+   Examples: "ניתן למצוא" instead of "תוכל/תוכלי למצוא", "אפשר לבדוק" instead of "תוכל/תוכלי לבדוק",
+   "מוזמנים לפנות" instead of "מוזמן/מוזמנת לפנות", "שווה לבדוק" instead of "תבדוק/תבדקי".
 
 Reply:"""
 
@@ -144,7 +148,7 @@ class AIReplyService:
         payload = {
             "model": "gpt-4o-mini",
             "messages": [
-                {"role": "system", "content": "You are a helpful business assistant. Always respond in Hebrew."},
+                {"role": "system", "content": "You are a helpful business assistant. Always respond in Hebrew using gender-neutral language suitable for both men and women."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7,
@@ -304,9 +308,14 @@ async def handle_incoming_email(
     if settings_obj.email_mode == "suggest":
         # Save as pending for approval
         pending = PendingReply(
+            channel="email",
             communication_id=communication.id,
+            lead_id=lead.id,
             suggested_reply=suggested_reply,
             ai_reasoning=reply_result.get("reasoning"),
+            trigger_message=communication.message_body,
+            trigger_subject=communication.subject,
+            sender_email=communication.sender_email if hasattr(communication, 'sender_email') else None,
             status="pending"
         )
         session.add(pending)
@@ -375,6 +384,90 @@ async def handle_incoming_email(
             logger.error(f"Auto-reply send failed: {send_result.get('error')}")
         
         await session.commit()
+
+
+async def handle_incoming_whatsapp(
+    communication: Communication,
+    session: AsyncSession
+):
+    """
+    טיפול בהודעת WhatsApp נכנסת.
+    בדומה ל-handle_incoming_email, יוצר הצעת תגובה לאישור.
+    """
+    logger.info(f"Handling incoming WhatsApp: {communication.id}")
+    
+    # Get auto-reply settings
+    result = await session.execute(select(AutoReply).limit(1))
+    settings_obj = result.scalar_one_or_none()
+    
+    if not settings_obj:
+        logger.info("No auto-reply settings found - skipping WhatsApp auto-reply")
+        return
+    
+    if not settings_obj.whatsapp_enabled:
+        logger.info("WhatsApp auto-reply is disabled")
+        return
+    
+    if settings_obj.whatsapp_mode == "off":
+        logger.info("WhatsApp mode is OFF - skipping auto-reply")
+        return
+    
+    # Get lead
+    result = await session.execute(
+        select(Lead).where(Lead.id == communication.lead_id)
+    )
+    lead = result.scalar_one_or_none()
+    
+    if not lead:
+        logger.warning(f"Lead not found for communication {communication.id}")
+        return
+    
+    # Check for escalation keywords
+    ai_service = AIReplyService()
+    keywords = settings_obj.keywords_trigger_human or ["ביטול", "תלונה", "החזר", "מנהל"]
+    
+    if ai_service.check_keywords_for_escalation(communication.message_body or "", keywords):
+        logger.info("WhatsApp message contains escalation keyword - requires human attention")
+        return
+    
+    # Check business hours
+    if settings_obj.business_hours_only:
+        if not ai_service.is_within_business_hours(
+            settings_obj.business_hours_start,
+            settings_obj.business_hours_end
+        ):
+            logger.info("Outside business hours - will handle WhatsApp later")
+            return
+    
+    # Generate AI reply
+    reply_result = await ai_service.generate_reply(
+        message=communication,
+        lead=lead,
+        conversation_history=[],
+        session=session
+    )
+    
+    if not reply_result.get("success"):
+        logger.error(f"Failed to generate WhatsApp AI reply: {reply_result.get('error')}")
+        return
+    
+    suggested_reply = reply_result["reply"]
+    
+    # Always save as pending (suggest mode is default)
+    pending = PendingReply(
+        channel="whatsapp",
+        communication_id=communication.id,
+        lead_id=lead.id,
+        suggested_reply=suggested_reply,
+        ai_reasoning=reply_result.get("reasoning"),
+        trigger_message=communication.message_body,
+        sender_name=lead.site_name or lead.domain,
+        status="pending"
+    )
+    session.add(pending)
+    await session.flush()
+    
+    logger.info(f"WhatsApp AI reply saved as pending: {pending.id}")
 
 
 # Singleton

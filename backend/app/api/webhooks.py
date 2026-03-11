@@ -102,9 +102,14 @@ async def whatsapp_webhook(
         
         await session.flush()
         
-        # TODO: הפעלת Auto-Reply אם מופעל
-        # from app.services.auto_reply_service import handle_incoming
-        # await handle_incoming(communication)
+        # Auto-Reply - אם מופעל, יצירת הצעת תגובה
+        try:
+            from app.services.ai_reply_service import handle_incoming_whatsapp
+            await handle_incoming_whatsapp(communication, session)
+        except ImportError:
+            logger.debug("WhatsApp auto-reply handler not yet implemented")
+        except Exception as e:
+            logger.error(f"WhatsApp auto-reply error: {e}")
         
         return {
             "status": "saved",

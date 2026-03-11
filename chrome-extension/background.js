@@ -5,7 +5,7 @@
  * Uses chrome.cookies.onChanged for reactive sync and chrome.alarms for periodic backup sync.
  */
 
-const DEFAULT_BACKEND_URL = "http://localhost:8001";
+const DEFAULT_BACKEND_URL = "http://localhost:8000";
 const ESSENTIAL_COOKIES = ["c_user", "xs", "fr"];
 const DEBOUNCE_MS = 2000;
 const PERIODIC_SYNC_MINUTES = 30;

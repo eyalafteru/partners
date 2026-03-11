@@ -74,14 +74,10 @@ class AutoResponderService:
             
             apify = get_apify_service()
             
-            # Use the existing facebook-comment-reply actor
-            result = await apify.run_actor(
-                actor_id="facebook-comment-reply",
-                input={
-                    "postUrl": post.fb_post_url,
-                    "replyMessage": post.first_comment_content,
-                    # cookies will be loaded from saved cookies
-                }
+            # Use reply_to_comment which handles actor ID and cookies
+            result = await apify.reply_to_comment(
+                post_url=post.fb_post_url,
+                reply_message=post.first_comment_content
             )
             
             if result and result.get("success"):
@@ -89,7 +85,8 @@ class AutoResponderService:
                 logger.info(f"✅ First comment posted for post {post_id}")
                 return True
             else:
-                logger.error(f"❌ Failed to post first comment for post {post_id}: {result}")
+                error = result.get("error", "Unknown") if result else "No result"
+                logger.error(f"❌ Failed to post first comment for post {post_id}: {error}")
                 return False
                 
         except Exception as e:
@@ -98,7 +95,8 @@ class AutoResponderService:
     
     async def check_and_respond_to_comments(self, campaign_id: int) -> int:
         """
-        בדיקה ותשובה לתגובות חדשות בקמפיין
+        בדיקה ותשובה אוטומטית לתגובות בקמפיין.
+        עובד רק על תגובות עם סטטוס "ai_suggested" (כבר יש הצעת AI מוכנה).
         """
         campaign = await self.get_campaign(campaign_id)
         if not campaign or not campaign.auto_responder_enabled:
@@ -106,16 +104,18 @@ class AutoResponderService:
         
         # בדיקת מגבלה יומית
         today_count = await self._get_today_auto_replies_count(campaign_id)
-        if today_count >= campaign.auto_responder_daily_limit:
-            logger.info(f"Daily limit reached for campaign {campaign_id}")
+        daily_limit = campaign.auto_responder_daily_limit or 10
+        if today_count >= daily_limit:
+            logger.info(f"Daily limit ({daily_limit}) reached for campaign {campaign_id}: {today_count} sent today")
             return 0
         
-        # שליפת תגובות שצריכות תשובה
+        # שליפת תגובות שמוכנות לתשובה אוטומטית
         replies = await self._get_pending_replies(campaign_id)
         
         responses_sent = 0
         for reply in replies:
-            if today_count + responses_sent >= campaign.auto_responder_daily_limit:
+            if today_count + responses_sent >= daily_limit:
+                logger.info(f"Daily limit reached mid-batch for campaign {campaign_id}")
                 break
             
             if await self.should_respond(reply, campaign):
@@ -127,50 +127,66 @@ class AutoResponderService:
     
     async def should_respond(self, reply: FacebookReply, campaign: FacebookCampaign) -> bool:
         """
-        לוגיקת החלטה האם להגיב
+        לוגיקת החלטה האם להגיב אוטומטית.
         """
         # אל תגיב לספאם
         if reply.ai_detected_intent == "spam":
             return False
         
-        # אל תגיב אם כבר נענה
-        if reply.status in ["responded", "ignored"]:
+        # אל תגיב אם כבר נענה או נדחה
+        if reply.status in ["responded", "ignored", "approved"]:
             return False
         
-        # בדיקת עיכוב
+        # חייב להיות הצעת AI מוכנה
+        if not reply.suggested_response:
+            return False
+        
+        # בדיקה אם AI ממליץ להעביר לטיפול אנושי
+        from app.services.facebook_reply_service import get_facebook_reply_service
+        reply_bot = get_facebook_reply_service()
+        if reply_bot.should_escalate_to_human(reply.ai_analysis or {}):
+            logger.info(f"Reply {reply.id} escalated to human (intent: {reply.ai_detected_intent})")
+            return False
+        
+        # בדיקת עיכוב - המתנה לפחות X דקות מרגע קבלת התגובה
+        delay_minutes = campaign.auto_responder_delay_minutes or 5
         if reply.received_at:
-            delay = timedelta(minutes=campaign.auto_responder_delay_minutes)
-            if datetime.now() - reply.received_at < delay:
+            delay = timedelta(minutes=delay_minutes)
+            time_since = datetime.now() - reply.received_at.replace(tzinfo=None)
+            if time_since < delay:
                 return False
         
         return True
     
     async def send_auto_response(self, reply: FacebookReply, campaign: FacebookCampaign) -> bool:
         """
-        שליחת תשובה אוטומטית
+        שליחת תשובה אוטומטית.
+        משתמש בהצעת AI הקיימת (suggested_response), או מייצר חדשה אם אין.
         """
         try:
-            # יצירת תשובה
-            response_text = await self._generate_response(reply, campaign)
+            # שימוש בהצעה קיימת, או יצירה חדשה כ-fallback
+            response_text = reply.suggested_response
             if not response_text:
+                response_text = await self._generate_response(reply, campaign)
+            if not response_text:
+                logger.warning(f"No response text available for reply {reply.id}")
                 return False
             
+            # בחירת ערוץ לשליחה
+            channel = campaign.auto_responder_type or "comment"
+            if channel == "ai_decide":
+                channel = reply.suggested_channel or ("messenger" if reply.wants_private else "comment")
+            
             # שליחה בהתאם לערוץ
-            if campaign.auto_responder_type == "comment":
-                success = await self._send_comment_reply(reply, response_text)
-            elif campaign.auto_responder_type == "messenger":
+            if channel == "messenger":
                 success = await self._send_messenger_reply(reply, response_text)
             else:
-                # ai_decide - בחירה אוטומטית
-                if reply.wants_private:
-                    success = await self._send_messenger_reply(reply, response_text)
-                else:
-                    success = await self._send_comment_reply(reply, response_text)
+                success = await self._send_comment_reply(reply, response_text)
             
             if success:
                 reply.status = "responded"
                 reply.actual_response = response_text
-                reply.response_channel = campaign.auto_responder_type
+                reply.response_channel = channel
                 reply.responded_at = datetime.now()
                 
                 # עדכון מונה בפוסט
@@ -178,13 +194,13 @@ class AutoResponderService:
                 if post:
                     post.auto_replies_sent = (post.auto_replies_sent or 0) + 1
                 
-                logger.info(f"✅ Auto response sent to reply {reply.id}")
+                logger.info(f"✅ Auto response sent to reply {reply.id} via {channel}")
                 return True
             
             return False
             
         except Exception as e:
-            logger.error(f"❌ Error sending auto response: {e}")
+            logger.error(f"❌ Error sending auto response for reply {reply.id}: {e}")
             return False
     
     async def _generate_response(self, reply: FacebookReply, campaign: FacebookCampaign) -> Optional[str]:
@@ -219,8 +235,8 @@ class AutoResponderService:
             שם המגיב: {reply.fb_user_name}
             {calculator_info}
             
-            כתוב תשובה קצרה, ידידותית ומועילה.
-            אם הוא מתעניין - הזמן אותו לבדוק את המחשבון.
+            כתוב תשובה קצרה, ידידותית ומועילה בשפה ניטרלית מבחינת מגדר (מתאימה לנשים ולגברים).
+            השתמש בצורות כמו "ניתן לבדוק", "אפשר לראות", "מוזמנים לנסות" במקום צורות מגדריות.
             """
             
             response = await generator.generate_text(
@@ -241,13 +257,18 @@ class AutoResponderService:
             
             apify = get_apify_service()
             
-            # שימוש ב-Actor לתגובות
-            result = await apify.run_actor(
-                actor_id="facebook-comment-reply",
-                input={
-                    "commentId": reply.fb_comment_id,
-                    "replyMessage": text,
-                }
+            # Get post URL (async query - do not use reply.post lazy load in async context)
+            post = await self.get_post(reply.post_id) if reply.post_id else None
+            post_url = post.fb_post_url if post else None
+            
+            if not post_url:
+                logger.error(f"No post URL found for reply {reply.id}")
+                return False
+            
+            result = await apify.reply_to_comment(
+                post_url=post_url,
+                reply_message=text,
+                comment_id=reply.fb_comment_id
             )
             
             return result and result.get("success", False)
@@ -263,16 +284,12 @@ class AutoResponderService:
             
             apify = get_apify_service()
             
-            # שימוש ב-Actor למסנג'ר
-            result = await apify.run_actor(
-                actor_id="facebook-message-sender",
-                input={
-                    "recipientId": reply.fb_user_id,
-                    "message": text,
-                }
+            result = await apify.send_single_message(
+                profile_url=reply.fb_user_id,
+                message=text
             )
             
-            return result and result.get("success", False)
+            return result is not None
             
         except Exception as e:
             logger.error(f"Error sending messenger reply: {e}")
@@ -297,11 +314,11 @@ class AutoResponderService:
         return result.scalar_one() or 0
     
     async def _get_pending_replies(self, campaign_id: int) -> List[FacebookReply]:
-        """שליפת תגובות שמחכות לתשובה"""
+        """שליפת תגובות עם הצעת AI מוכנה שמחכות לתשובה אוטומטית"""
         result = await self.session.execute(
             select(FacebookReply).where(
                 and_(
-                    FacebookReply.status == "new",
+                    FacebookReply.status.in_(["ai_suggested", "new"]),
                     FacebookReply.post_id.in_(
                         select(FacebookPost.id).where(
                             and_(

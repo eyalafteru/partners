@@ -54,7 +54,7 @@ def send_outreach_whatsapp(self, lead_id: int, message: str = None):
         wa = get_whatsapp_service()
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(wa.send_message(phone, message))
+        result = loop.run_until_complete(wa.send_to_phone(phone, message))
         loop.close()
         
         # שמירת התקשורת

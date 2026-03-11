@@ -2,12 +2,14 @@
 PartnerCalc OS - Facebook Reply Bot Service
 שירות AI לניתוח תגובות ויצירת תשובות
 """
+import os
 import httpx
 import re
 from typing import Optional, Dict, Any, List, Tuple
 from loguru import logger
 
 from app.config import settings
+from app.services.post_generator_service import get_post_generator_service
 
 
 # Prompt לניתוח תגובה
@@ -57,10 +59,14 @@ GENERATE_RESPONSE_PROMPT = """אתה נציג שירות לקוחות מקצוע
 דרישות לתשובה:
 1. כתוב בעברית
 2. היה ידידותי ומקצועי
-3. אם הערוץ הוא "messenger" - הזמן אותו לשיחה פרטית
-4. אם הערוץ הוא "comment" - ענה בקצרה ומעודד
+3. אם הערוץ הוא "messenger" - יש להזמין לשיחה פרטית
+4. אם הערוץ הוא "comment" - יש לענות בקצרה ובאופן מעודד
 5. כלול קריאה לפעולה
 6. אורך: 2-4 משפטים
+7. חובה: כתוב בשפה ניטרלית מבחינת מגדר - מתאימה גם לנשים וגם לגברים.
+   במקום פנייה בגוף שני (תוכל, תרצה, תמצא) - השתמש בצורות סביליות/ניטרליות.
+   דוגמאות: "ניתן למצוא" במקום "תוכל למצוא", "אפשר לבדוק" במקום "תוכל לבדוק",
+   "מוזמנים לפנות" במקום "מוזמן לפנות", "שווה לבדוק" במקום "תבדוק".
 
 החזר רק את טקסט התשובה, ללא הסברים."""
 
@@ -76,12 +82,21 @@ class FacebookReplyBotService:
     """שירות AI לניתוח תגובות ויצירת תשובות"""
     
     def __init__(self):
-        self.openai_api_key = settings.openai_api_key
+        self.openai_api_key = (getattr(settings, 'openai_api_key', '') or '').strip()
+        # טעינה מ-settings (מקובץ .env) או מ-os.environ כ-fallback
+        _ak = (getattr(settings, 'anthropic_api_key', '') or '').strip().replace("\r", "").replace("\n", "")
+        if not _ak:
+            _ak = (os.environ.get("ANTHROPIC_API_KEY") or "").strip().replace("\r", "").replace("\n", "")
+        self.anthropic_api_key = _ak
+        if self.anthropic_api_key:
+            logger.info("Anthropic API key: set (len={})", len(self.anthropic_api_key))
+        else:
+            logger.debug("Anthropic API key: not set")
     
     @property
     def is_configured(self) -> bool:
         """בדיקה אם השירות מוגדר"""
-        return bool(self.openai_api_key)
+        return bool(self.openai_api_key) or bool(self.anthropic_api_key)
     
     async def _call_gpt(
         self,
@@ -91,11 +106,105 @@ class FacebookReplyBotService:
         temperature: float = 0.7,
         max_tokens: int = 500
     ) -> Optional[str]:
-        """קריאה ל-OpenAI GPT"""
+        """קריאה ל-AI - משתמש באותה פנייה כמו ביצירת פוסטים (Claude) או OpenAI"""
         if not self.is_configured:
-            logger.error("OpenAI API key not configured")
+            logger.error("No AI API key configured (neither OpenAI nor Anthropic)")
             return None
         
+        # כשמוגדר Anthropic – אותה פניית API כמו ב"צור פוסטים": אותו מודל, אותו _call_ai, רק הפרומט שונה
+        if self.anthropic_api_key:
+            post_gen = get_post_generator_service()
+            if post_gen.anthropic_api_key:
+                model = post_gen._get_available_model()  # כמו ביצירת פוסטים: claude-sonnet-4
+                return await post_gen._call_ai(
+                    prompt=prompt,
+                    system_message=system_message,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+            return await self._call_claude(prompt, system_message, temperature, max_tokens)
+        
+        return await self._call_openai(prompt, system_message, model, temperature, max_tokens)
+    
+    async def _call_claude(
+        self,
+        prompt: str,
+        system_message: str,
+        temperature: float = 0.7,
+        max_tokens: int = 500
+    ) -> Optional[str]:
+        """קריאה ל-Anthropic Claude"""
+        url = "https://api.anthropic.com/v1/messages"
+        api_key = self.anthropic_api_key.strip()
+        if not api_key:
+            logger.error("ANTHROPIC_API_KEY is empty after strip")
+            raise ValueError("מפתח Anthropic ריק. בדוק ANTHROPIC_API_KEY ב-.env")
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "claude-sonnet-4-5-20250514",
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "system": system_message,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ]
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(url, json=payload, headers=headers)
+                # On 401, retry once with Authorization: Bearer (some envs expect it)
+                if response.status_code == 401:
+                    headers_bearer = {
+                        "Authorization": f"Bearer {api_key}",
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json"
+                    }
+                    response = await client.post(url, json=payload, headers=headers_bearer)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    content = data.get("content") or []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text = block.get("text", "").strip()
+                            if text:
+                                return text
+                    if content and isinstance(content[0], dict) and "text" in content[0]:
+                        return (content[0].get("text") or "").strip()
+                    logger.warning("Claude API: no text block in content")
+                    return None
+                else:
+                    err_text = response.text
+                    try:
+                        err_body = response.json()
+                        err_text = err_body.get("error", {}).get("message", err_text) if isinstance(err_body.get("error"), dict) else err_text
+                    except Exception:
+                        pass
+                    logger.error(f"Claude API error: {response.status_code} - {err_text}")
+                    raise ValueError(f"שגיאת Claude API ({response.status_code}): {err_text[:200]}")
+                    
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"Claude call error: {e}")
+            raise ValueError(f"שגיאת חיבור ל-AI: {e!s}") from e
+    
+    async def _call_openai(
+        self,
+        prompt: str,
+        system_message: str,
+        model: str = "gpt-4o-mini",
+        temperature: float = 0.7,
+        max_tokens: int = 500
+    ) -> Optional[str]:
+        """קריאה ל-OpenAI GPT"""
         url = "https://api.openai.com/v1/chat/completions"
         
         headers = {
@@ -247,7 +356,7 @@ class FacebookReplyBotService:
         
         response = await self._call_gpt(
             prompt=prompt,
-            system_message="אתה נציג שירות לקוחות מקצועי וידידותי. ענה בעברית.",
+            system_message="אתה נציג שירות לקוחות מקצועי וידידותי. ענה בעברית בשפה ניטרלית מבחינת מגדר - מתאימה לנשים ולגברים כאחד.",
             temperature=0.7
         )
         

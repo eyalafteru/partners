@@ -5,6 +5,7 @@ API endpoints לניהול פרסום בקבוצות פייסבוק
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
+from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from pydantic import BaseModel, validator
 from datetime import datetime
@@ -166,13 +167,17 @@ class ReplyResponse(BaseModel):
     post_id: int
     fb_user_name: Optional[str]
     fb_user_profile_url: Optional[str]
+    fb_user_profile_pic: Optional[str] = None
     message: str
     ai_detected_intent: Optional[str]
+    ai_analysis: Optional[dict] = None
     wants_private: bool
     status: str
     suggested_response: Optional[str]
     suggested_channel: Optional[str]
     actual_response: Optional[str]
+    response_channel: Optional[str] = None
+    responded_at: Optional[datetime] = None
     received_at: Optional[datetime]
     created_at: datetime
     
@@ -250,7 +255,28 @@ async def create_group(
     data: GroupCreate,
     session: AsyncSession = Depends(get_async_session)
 ):
-    """הוספת קבוצה חדשה"""
+    """הוספת קבוצה חדשה, או הפעלה מחדש של קבוצה שבוטלה"""
+    # Check if group already exists (possibly soft-deleted)
+    result = await session.execute(
+        select(FacebookGroup).where(FacebookGroup.fb_group_id == data.fb_group_id)
+    )
+    existing = result.scalar_one_or_none()
+    
+    if existing:
+        if existing.is_active:
+            raise HTTPException(status_code=409, detail=f"קבוצה עם מזהה {data.fb_group_id} כבר קיימת במערכת")
+        # Reactivate soft-deleted group and update its details
+        existing.is_active = True
+        if data.name:
+            existing.name = data.name
+        if data.url:
+            existing.url = data.url
+        if data.category:
+            existing.category = data.category
+        await session.commit()
+        await session.refresh(existing)
+        return existing
+    
     service = get_facebook_marketing_service(session)
     group = await service.add_group(**data.model_dump())
     await session.commit()
@@ -999,26 +1025,85 @@ async def generate_reply_response(
     session: AsyncSession = Depends(get_async_session)
 ):
     """יצירת תשובה מוצעת לתגובה"""
+    logger.info(f"📩 Generate reply requested: reply_id={reply_id}")
     service = get_facebook_marketing_service(session)
-    reply = await service.generate_reply_response(reply_id)
+    try:
+        reply = await service.generate_reply_response(reply_id)
+    except ValueError as e:
+        logger.error(f"❌ Generate reply ValueError: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.exception("Generate reply failed")
+        logger.error(f"❌ Generate reply error: {e!s}")
+        raise HTTPException(status_code=503, detail=f"שגיאה ביצירת תשובה: {e!s}")
     await session.commit()
     return reply
 
-@router.post("/replies/{reply_id}/respond", response_model=ReplyResponse, tags=["Replies"])
+@router.post("/replies/{reply_id}/respond", tags=["Replies"])
 async def send_reply_response(
     reply_id: int,
     data: ReplyResponseAction,
     session: AsyncSession = Depends(get_async_session)
 ):
     """אישור ושליחת תשובה"""
+    from fastapi.responses import JSONResponse
     service = get_facebook_marketing_service(session)
-    reply = await service.approve_and_send_response(
+    reply, send_error = await service.approve_and_send_response(
         reply_id=reply_id,
         response_text=data.response_text,
         channel=data.channel
     )
     await session.commit()
+    reply_data = ReplyResponse.model_validate(reply).model_dump(mode="json")
+    if send_error:
+        return JSONResponse(
+            content=reply_data,
+            headers={"X-Send-Error": send_error[:500]},
+        )
+    return reply_data
+
+
+@router.post("/replies/{reply_id}/ignore", response_model=ReplyResponse, tags=["Replies"])
+async def ignore_reply(
+    reply_id: int,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """סימון תגובה כ-ignored (לא רלוונטי / ספאם)"""
+    result = await session.execute(
+        select(FacebookReply).where(FacebookReply.id == reply_id)
+    )
+    reply = result.scalar_one_or_none()
+    if not reply:
+        raise HTTPException(status_code=404, detail="Reply not found")
+    
+    reply.status = "ignored"
+    await session.commit()
     return reply
+
+
+@router.post("/replies/{reply_id}/mark-responded", response_model=ReplyResponse, tags=["Replies"])
+async def mark_reply_responded(
+    reply_id: int,
+    session: AsyncSession = Depends(get_async_session)
+):
+    """סימון תגובה כנענתה (לאחר פרסום ידני בפייסבוק)"""
+    from datetime import datetime
+    
+    result = await session.execute(
+        select(FacebookReply).where(FacebookReply.id == reply_id)
+    )
+    reply = result.scalar_one_or_none()
+    if not reply:
+        raise HTTPException(status_code=404, detail="Reply not found")
+    
+    reply.status = "responded"
+    reply.responded_at = datetime.utcnow()
+    if not reply.actual_response:
+        reply.actual_response = reply.suggested_response
+    
+    await session.commit()
+    return reply
+
 
 @router.post("/posts/{post_id}/sync-comments", tags=["Replies"])
 async def sync_post_comments(
@@ -1035,6 +1120,16 @@ async def sync_post_comments(
         "post_id": post_id,
         "new_replies": len(replies)
     }
+
+
+@router.get("/replies/stats", tags=["Replies"])
+async def get_reply_stats(
+    session: AsyncSession = Depends(get_async_session)
+):
+    """סטטיסטיקות תגובות - כמה ממתינות, כמה נענו היום, פירוט לפי intent"""
+    service = get_facebook_marketing_service(session)
+    stats = await service.get_reply_stats()
+    return stats
 
 
 # ========== Calculators ==========
@@ -1097,52 +1192,170 @@ async def get_stats(
     return await service.get_stats()
 
 
+# ========== Publishing Profiles (מעבר בין יוזרים) ==========
+
+class ProfileItem(BaseModel):
+    id: int
+    name: str
+    is_active: bool
+    updated_at: Optional[datetime] = None
+
+
+@router.get("/profiles", response_model=List[ProfileItem], tags=["Cookies"])
+async def list_publishing_profiles():
+    """רשימת פרופילי פרסום (למשל אייל / שלי). הפרופיל הפעיל משמש לפרסום ולסנכרון."""
+    from app.database import get_async_session_context
+    from sqlalchemy import text as sa_text
+    try:
+        async with get_async_session_context() as db:
+            r = await db.execute(sa_text(
+                "SELECT id, name, is_active, updated_at FROM facebook_publishing_profiles ORDER BY id"
+            ))
+            rows = r.fetchall()
+        return [
+            ProfileItem(id=row[0], name=row[1], is_active=bool(row[2]), updated_at=row[3])
+            for row in rows
+        ]
+    except Exception as e:
+        logger.warning(f"🍪 list profiles: {e}")
+        return []
+
+
+class CreateProfileRequest(BaseModel):
+    name: str
+
+
+@router.post("/profiles", response_model=ProfileItem, tags=["Cookies"])
+async def create_publishing_profile(data: CreateProfileRequest):
+    """יצירת פרופיל פרסום חדש (למשל 'שלי'). אחר כך אפשר להגדיר כפעיל ולסנכרן אליו cookies."""
+    from app.database import get_async_session_context
+    from sqlalchemy import text as sa_text
+    name = (data.name or "").strip() or "פרופיל חדש"
+    async with get_async_session_context() as db:
+        await db.execute(sa_text("""
+            INSERT INTO facebook_publishing_profiles (name, is_active, updated_at, created_at)
+            VALUES (:name, 0, NOW(), NOW())
+        """), {"name": name})
+        await db.commit()
+        r = await db.execute(sa_text(
+            "SELECT id, name, is_active, updated_at FROM facebook_publishing_profiles WHERE name = :name ORDER BY id DESC LIMIT 1"
+        ), {"name": name})
+        row = r.fetchone()
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to create profile")
+    logger.info(f"🍪 Profile created: {name} (id={row[0]})")
+    return ProfileItem(id=row[0], name=row[1], is_active=bool(row[2]), updated_at=row[3])
+
+
+@router.put("/profiles/{profile_id}/set-active", tags=["Cookies"])
+async def set_active_profile(profile_id: int):
+    """הגדרת פרופיל כפעיל – מכאן ואילך פרסום וסנכרון ישתמשו בפרופיל הזה."""
+    from app.database import get_async_session_context
+    from sqlalchemy import text as sa_text
+    async with get_async_session_context() as db:
+        await db.execute(sa_text(
+            "UPDATE facebook_publishing_profiles SET is_active = 0"
+        ))
+        await db.execute(sa_text(
+            "UPDATE facebook_publishing_profiles SET is_active = 1 WHERE id = :pid"
+        ), {"pid": profile_id})
+        await db.commit()
+    apify = get_apify_service()
+    apify.reload_cookies()
+    logger.info(f"🍪 Active profile set to id={profile_id}")
+    return {"status": "ok", "activeProfileId": profile_id}
+
+
 # ========== Cookie Management ==========
 
 class CookieUploadRequest(BaseModel):
     cookies: list  # JSON array of cookie objects
+    profile_id: Optional[int] = None  # אם לא נשלח – שומר בפרופיל הפעיל
 
 
 @router.post("/cookies/upload", tags=["Cookies"])
 async def upload_cookies(request: CookieUploadRequest):
     """
-    העלאת cookies חדשים של פייסבוק
-    מקבל JSON array של cookies (מפלאגין Export cookie JSON)
-    שומר ל-.env ומרענן את השירותים
+    העלאת cookies של פייסבוק.
+    אם יש פרופילים: שומר בפרופיל שצוין (profile_id) או בפרופיל הפעיל.
+    אם אין פרופילים: שומר ב-facebook_cookie_storage id=1 ו-.env (תאימות לאחור).
     """
     import json
     import os
+    import hashlib
+    import platform
     
     cookies = request.cookies
+    profile_id = request.profile_id
     
-    # Validate cookies - must have c_user, xs, fr
     cookie_names = {c.get("name") for c in cookies if isinstance(c, dict)}
     required_cookies = {"c_user", "xs", "fr"}
     missing = required_cookies - cookie_names
-    
     if missing:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"חסרים cookies חיוניים: {', '.join(missing)}. יש לייצא מפייסבוק עם הפלאגין."
         )
     
-    # Serialize cookies to JSON string
     cookie_json = json.dumps(cookies, ensure_ascii=False)
+    updated_at = datetime.utcnow().isoformat()
+    cookie_hash = hashlib.sha256(cookie_json.encode()).hexdigest()[:16]
+    source_machine = platform.node()
+    db_saved = False
     
-    # Update .env file
-    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
+    from app.database import get_async_session_context
+    from sqlalchemy import text as sa_text
     
     try:
-        with open(env_path, "r", encoding="utf-8") as f:
-            env_content = f.read()
-        
-        # Replace FACEBOOK_COOKIE line
-        import re
-        updated_at = datetime.utcnow().isoformat()
-        
-        if "FACEBOOK_COOKIE=" in env_content:
-            # Replace existing cookie line
-            lines = env_content.split("\n")
+        async with get_async_session_context() as db_session:
+            # יש טבלת פרופילים?
+            r = await db_session.execute(sa_text(
+                "SELECT id FROM facebook_publishing_profiles LIMIT 1"
+            ))
+            has_profiles = r.scalar() is not None
+            
+            if has_profiles:
+                target_id = profile_id
+                if target_id is None:
+                    r2 = await db_session.execute(sa_text(
+                        "SELECT id FROM facebook_publishing_profiles WHERE is_active = 1 LIMIT 1"
+                    ))
+                    target_id = r2.scalar()
+                if target_id is None:
+                    r3 = await db_session.execute(sa_text(
+                        "SELECT id FROM facebook_publishing_profiles ORDER BY id LIMIT 1"
+                    ))
+                    target_id = r3.scalar()
+                if target_id is not None:
+                    await db_session.execute(sa_text("""
+                        UPDATE facebook_publishing_profiles
+                        SET cookie_json = :cj, cookie_hash = :ch, source_machine = :sm, updated_at = NOW()
+                        WHERE id = :pid
+                    """), {"cj": cookie_json, "ch": cookie_hash, "sm": source_machine, "pid": target_id})
+                    await db_session.commit()
+                    db_saved = True
+                    logger.info(f"🍪 ✅ Cookies saved to profile id={target_id} (hash: {cookie_hash})")
+            
+            if not db_saved:
+                # Legacy: facebook_cookie_storage
+                await db_session.execute(sa_text(
+                    "INSERT INTO facebook_cookie_storage (id, cookie_json, cookie_hash, source_machine, updated_at, created_at) "
+                    "VALUES (1, :cookie_json, :cookie_hash, :source_machine, NOW(), NOW()) "
+                    "ON DUPLICATE KEY UPDATE "
+                    "cookie_json = VALUES(cookie_json), cookie_hash = VALUES(cookie_hash), "
+                    "source_machine = VALUES(source_machine), updated_at = NOW()"
+                ), {"cookie_json": cookie_json, "cookie_hash": cookie_hash, "source_machine": source_machine})
+                await db_session.commit()
+                db_saved = True
+                logger.info(f"🍪 ✅ Cookies saved to DB legacy (hash: {cookie_hash})")
+    except Exception as db_err:
+        logger.warning(f"🍪 ⚠️ Failed to save cookies to DB: {db_err}")
+    
+    if not db_saved:
+        env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                lines = f.read().split("\n")
             new_lines = []
             for line in lines:
                 if line.startswith("FACEBOOK_COOKIE="):
@@ -1151,63 +1364,78 @@ async def upload_cookies(request: CookieUploadRequest):
                     new_lines.append(f"FACEBOOK_COOKIE_UPDATED_AT={updated_at}")
                 else:
                     new_lines.append(line)
-            env_content = "\n".join(new_lines)
-        else:
-            env_content += f"\nFACEBOOK_COOKIE={cookie_json}\n"
-            env_content += f"FACEBOOK_COOKIE_UPDATED_AT={updated_at}\n"
-        
-        # Add FACEBOOK_COOKIE_UPDATED_AT if not present
-        if "FACEBOOK_COOKIE_UPDATED_AT=" not in env_content:
-            env_content += f"\nFACEBOOK_COOKIE_UPDATED_AT={updated_at}\n"
-        
-        with open(env_path, "w", encoding="utf-8") as f:
-            f.write(env_content)
-        
-        # Reload settings and apify service
-        apify = get_apify_service()
-        apify.reload_cookies()
-        
-        logger.info(f"🍪 ✅ Facebook cookies updated: {len(cookies)} cookies, names: {list(cookie_names)}")
-        
-        return {
-            "status": "success",
-            "message": f"Cookies עודכנו בהצלחה ({len(cookies)} cookies)",
-            "cookieCount": len(cookies),
-            "updatedAt": updated_at,
-        }
-        
-    except Exception as e:
-        logger.error(f"🍪 ❌ Failed to update cookies: {e}")
-        raise HTTPException(status_code=500, detail=f"שגיאה בעדכון cookies: {str(e)}")
+            if not any(line.startswith("FACEBOOK_COOKIE=") for line in lines):
+                new_lines.append(f"FACEBOOK_COOKIE={cookie_json}")
+            if not any(line.startswith("FACEBOOK_COOKIE_UPDATED_AT=") for line in lines):
+                new_lines.append(f"FACEBOOK_COOKIE_UPDATED_AT={updated_at}")
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(new_lines))
+        except Exception as env_err:
+            logger.warning(f"🍪 ⚠️ Failed to save to .env: {env_err}")
+    
+    apify = get_apify_service()
+    apify.reload_cookies()
+    logger.info(f"🍪 Facebook cookies updated: {len(cookies)} cookies")
+    return {
+        "status": "success",
+        "message": f"Cookies עודכנו בהצלחה ({len(cookies)} cookies)",
+        "cookieCount": len(cookies),
+        "updatedAt": updated_at,
+        "savedToDb": db_saved,
+    }
 
 
 @router.get("/cookies/status", tags=["Cookies"])
 async def get_cookie_status():
     """
-    בדיקת סטטוס cookies של פייסבוק
-    מחזיר אם יש cookies, כמה, ומתי עודכנו
+    בדיקת סטטוס cookies + רשימת פרופילים והפרופיל הפעיל.
     """
     import json
     from app.config import get_settings
+    from app.services.facebook_cookie_resolver import get_facebook_cookies_for_publishing
     
-    current_settings = get_settings()
+    cookie_str, profile_name = get_facebook_cookies_for_publishing()
+    source = "profile" if profile_name else ("database" if cookie_str else "none")
+    db_updated_at = None
+    db_source_machine = None
     
-    cookie_str = current_settings.facebook_cookie
+    if not cookie_str:
+        current_settings = get_settings()
+        cookie_str = current_settings.facebook_cookie
+        if cookie_str:
+            source = "env"
+    
+    profiles = []
+    active_profile = None
+    try:
+        from app.database import get_async_session_context
+        from sqlalchemy import text as sa_text
+        async with get_async_session_context() as db_session:
+            r = await db_session.execute(sa_text(
+                "SELECT id, name, is_active, updated_at FROM facebook_publishing_profiles ORDER BY id"
+            ))
+            for row in r.fetchall():
+                profiles.append({"id": row[0], "name": row[1], "is_active": bool(row[2]), "updated_at": row[3].isoformat() if row[3] else None})
+                if row[2]:
+                    active_profile = {"id": row[0], "name": row[1]}
+            if not active_profile and profiles:
+                active_profile = {"id": profiles[0]["id"], "name": profiles[0]["name"]}
+    except Exception:
+        pass
+    
     has_cookie = bool(cookie_str)
     cookie_count = 0
     cookie_names = []
-    
     if has_cookie:
         try:
             cookies = json.loads(cookie_str) if isinstance(cookie_str, str) else cookie_str
             cookie_count = len(cookies)
             cookie_names = [c.get("name") for c in cookies if isinstance(c, dict)]
-        except:
+        except Exception:
             pass
-    
-    # Check for essential cookies
     essential = {"c_user", "xs", "fr"}
     has_essential = essential.issubset(set(cookie_names))
+    current_settings = get_settings()
     
     return {
         "status": "valid" if (has_cookie and has_essential) else "expired",
@@ -1215,7 +1443,11 @@ async def get_cookie_status():
         "hasEssentialCookies": has_essential,
         "cookieCount": cookie_count,
         "cookieNames": cookie_names,
-        "lastUpdated": current_settings.facebook_cookie_updated_at or None,
+        "lastUpdated": db_updated_at or current_settings.facebook_cookie_updated_at or None,
+        "source": source,
+        "sourceMachine": db_source_machine,
+        "profiles": profiles,
+        "activeProfile": active_profile,
     }
 
 

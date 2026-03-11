@@ -204,6 +204,16 @@ TWILIO_PHONE_NUMBER=+972...
 APIFY_API_TOKEN=your_token
 ```
 
+### פרסום אוטומטי של תגובות בפייסבוק (דפדפן מקומי)
+
+כדי ש"אשר" יפרסם תגובה אוטומטית בפייסבוק, צריך להגדיר דפדפן מקומי (Playwright).  
+**מדריך מלא:** `partners/backend/BROWSER-SETUP.md`
+
+**בקצרה:**
+1. `pip install playwright` ואז `playwright install chromium`
+2. Cookie פייסבוק ב-DB (העלאה בממשק) או ב-.env כ־`FACEBOOK_COOKIE`
+3. הבקנד רץ על מחשב עם מסך (לא שרת מרוחק) – ייפתח חלון Chrome לפרסום
+
 ## 📊 AI Nodes (צמתי AI)
 
 1. **filter_real_business** - סינון עסקים אמיתיים
@@ -277,6 +287,81 @@ python -m uvicorn app.main:app --reload --port 8001
 - [ ] הוספת Unified Inbox
 - [ ] הוספת Watchdog למעקב התקנות
 - [ ] הוספת Auto-Reply
+
+---
+
+## 🖥️ שרת ייצור (Production Server)
+
+| פרמטר | ערך |
+|-------|-----|
+| **IP** | `49.13.31.182` |
+| **SSH Port** | `22` |
+| **SSH User** | `root` |
+| **גישת SSH** | מפתח SSH מוגדר (ללא סיסמה) |
+| **דומיין** | `partners.ppcmedia.co.il` |
+| **נתיב הפרויקט** | `/opt/partnercalc-os/` |
+| **Docker Compose** | `docker/docker-compose.prod.yml` |
+
+### 🗄️ בסיס נתונים (ייצור)
+
+| פרמטר | ערך |
+|-------|-----|
+| **DB Host** | `mariadb` (רשת Docker פנימית) |
+| **DB Name** | `partnercalc` |
+| **DB User** | `partnercalc` |
+| **DB Password** | `partnercalc123` |
+| **DB Host חיצוני** | `49.13.31.182:3306` |
+
+### 🚀 פריסה לייצור (Deployment)
+
+```bash
+# 1. מהמחשב המקומי - Push לגיטהאב
+git add .
+git commit -m "your message"
+git push origin main
+
+# 2. SSH לשרת (ללא סיסמה - מפתח SSH)
+ssh root@49.13.31.182
+
+# 3. בשרת - משוך קוד חדש
+cd /opt/partnercalc-os
+git pull origin main
+
+# 4. הרץ migrations חדשים
+cd backend && python -m alembic upgrade head && cd ..
+
+# 5. ריסטארט הבאקנד
+docker-compose -f docker/docker-compose.prod.yml restart backend
+
+# 6. בדוק שהכל עובד
+curl http://localhost:8000/api/health
+curl https://partners.ppcmedia.co.il/api/lead-hunter/categories
+```
+
+### 🔑 מפתחות API בשרת
+
+עדכן `/opt/partnercalc-os/backend/.env` עם:
+
+```env
+# AI - Anthropic Claude
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+
+# WhatsApp - Green API
+GREENAPI_INSTANCE_ID=7105206891
+GREENAPI_API_TOKEN=20fdcb013dd3423e845cba372e6886996bf7246ed39d4b9c89
+GREENAPI_URL=https://7105.api.greenapi.com
+```
+
+### 📡 Lead Hunter - Google Apps Script
+
+הסקריפט נמצא ב: `scripts/lead_hunter_sheets.gs`
+
+- **גיליון**: [all_posts](https://docs.google.com/spreadsheets/d/1gwwBf6-7cqEerBdg8ZhyeXsuy9tlGwVD8ROJiRfIhl8)
+- **שורת התחלה**: 171 (שורות 1-170 הן נתונים ישנים)
+- **תדירות**: כל 5 דקות אוטומטית
+- **Token**: `lead-hunter-secret-2024`
+
+---
 
 ## 📝 License
 

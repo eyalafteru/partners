@@ -37,7 +37,7 @@ interface GenerateResult {
 // API Base
 const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost' 
   ? '/api/strategies' 
-  : 'http://localhost:8000/api/strategies';
+  : 'http://localhost:8001/api/strategies';
 
 export default function PostStrategiesPage() {
   const [strategies, setStrategies] = useState<PostStrategy[]>([]);

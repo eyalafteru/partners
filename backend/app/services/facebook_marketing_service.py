@@ -23,6 +23,7 @@ from app.services.post_generator_service import get_post_generator_service
 from app.services.apify_service import get_apify_service
 from app.services.facebook_reply_service import get_facebook_reply_service
 from app.services.whatsapp_service import get_whatsapp_service
+from app.services.local_browser_service import get_local_browser_service
 from app.services.anti_spam_service import AntiSpamService
 
 
@@ -226,6 +227,21 @@ class FacebookMarketingService:
                 # ✨ יצירה עם אסטרטגיה ומחשבון
                 logger.info(f"📝 Generating with strategy '{strategy.name}' for group '{group.name}'")
                 
+                # שליפת פוסטים קודמים לקבוצה הזו (כדי שה-AI לא יחזור על עצמו)
+                prev_posts_result = await self.session.execute(
+                    select(FacebookPost.content)
+                    .where(
+                        and_(
+                            FacebookPost.group_id == group.id,
+                            FacebookPost.content.isnot(None),
+                            FacebookPost.content != ""
+                        )
+                    )
+                    .order_by(FacebookPost.created_at.desc())
+                    .limit(5)
+                )
+                previous_posts = [row[0] for row in prev_posts_result.all()]
+                
                 gen_result = await self.post_generator.generate_strategic_post(
                     calculator_name=calculator.name,
                     calculator_url=calculator.target_url or "",
@@ -233,12 +249,14 @@ class FacebookMarketingService:
                     strategy_system_prompt=strategy.system_prompt or "",
                     strategy_post_template=strategy.post_template or "",
                     group_name=group.name,
-                    previous_posts=[],
+                    group_category=group.category or "",
+                    group_description=group.description or "",
+                    previous_posts=previous_posts,
                     include_first_comment=include_first_comment
                 )
                 
                 # הכנת תוכן הפוסט עם לינק YouTube אם צריך
-                post_content = gen_result.get("post_content", "")
+                post_content = gen_result.get("post_content") or ""
                 youtube_url = None
                 
                 # בדיקה אם צריך לכלול וידאו
@@ -705,7 +723,7 @@ class FacebookMarketingService:
     # ========== Replies Management ==========
     
     async def sync_post_comments(self, post_id: int) -> List[FacebookReply]:
-        """סנכרון תגובות לפוסט"""
+        """סנכרון תגובות לפוסט - כולל ניתוח AI ויצירת הצעת תגובה"""
         result = await self.session.execute(
             select(FacebookPost).where(FacebookPost.id == post_id)
         )
@@ -720,14 +738,34 @@ class FacebookMarketingService:
         if not comments:
             return []
         
+        # זיהוי שמות פרופיל שלנו כדי לדלג על תגובות שלנו
+        from app.config import settings as current_settings
+        own_names_raw = current_settings.fb_own_profile_names or ""
+        own_names = {name.strip().lower() for name in own_names_raw.split(",") if name.strip()}
+        
         new_replies = []
+        post_context = (post.content or "")[:200]
         
         for comment in comments:
             fb_comment_id = comment.get("id") or comment.get("commentId")
-            if not fb_comment_id:
+            message = (comment.get("text") or "").strip()
+            commenter_name = (comment.get("profileName") or "").strip()
+            
+            # דילוג על תגובות ריקות
+            if not message:
                 continue
             
-            # בדיקה אם כבר קיים
+            # יצירת ID אם אין (עבור custom scraper)
+            if not fb_comment_id:
+                import hashlib
+                fb_comment_id = f"pw_{hashlib.md5(f'{commenter_name}:{message[:50]}'.encode()).hexdigest()[:20]}"
+            
+            # דילוג על תגובות של בעל החשבון (תגובות שלנו)
+            if commenter_name.lower() in own_names:
+                logger.debug(f"💬 Skipping own comment from '{commenter_name}'")
+                continue
+            
+            # בדיקה אם כבר קיים (idempotency) - לפי ID
             existing = await self.session.execute(
                 select(FacebookReply).where(
                     FacebookReply.fb_comment_id == fb_comment_id
@@ -736,12 +774,33 @@ class FacebookMarketingService:
             if existing.scalar_one_or_none():
                 continue
             
-            # ניתוח התגובה
-            message = comment.get("text", "")
-            analysis = await self.reply_bot.analyze_reply(
-                message=message,
-                post_context=post.content[:200]
+            # בדיקה נוספת: שם + טקסט (למניעת כפילויות בין scraper-ים שונים)
+            existing_by_text = await self.session.execute(
+                select(FacebookReply).where(
+                    FacebookReply.post_id == post.id,
+                    FacebookReply.fb_user_name == commenter_name,
+                    FacebookReply.message == message
+                )
             )
+            if existing_by_text.scalar_one_or_none():
+                continue
+            
+            # ניתוח מלא: analyze + generate response בקריאה אחת
+            try:
+                process_result = await self.reply_bot.process_reply(
+                    message=message,
+                    post_context=post_context
+                )
+                analysis = process_result.get("analysis", {})
+                suggested_response = process_result.get("suggested_response")
+                suggested_channel = process_result.get("suggested_channel", "comment")
+                initial_status = "ai_suggested" if suggested_response else "new"
+            except Exception as e:
+                logger.warning(f"💬 ⚠️ AI processing failed for comment {fb_comment_id}: {e}")
+                analysis = {}
+                suggested_response = None
+                suggested_channel = None
+                initial_status = "new"
             
             reply = FacebookReply(
                 post_id=post.id,
@@ -755,7 +814,9 @@ class FacebookMarketingService:
                 ai_intent_confidence=None,
                 wants_private=analysis.get("wants_private", False),
                 ai_analysis=analysis,
-                status="new",
+                suggested_response=suggested_response,
+                suggested_channel=suggested_channel,
+                status=initial_status,
                 received_at=datetime.utcnow()
             )
             self.session.add(reply)
@@ -768,22 +829,22 @@ class FacebookMarketingService:
         
         # שליחת התראות WhatsApp על תגובות חדשות
         if new_replies:
-            # קבלת שם הקבוצה
             group_result = await self.session.execute(
                 select(FacebookGroup).where(FacebookGroup.id == post.group_id)
             )
             group = group_result.scalar_one_or_none()
             group_name = group.name if group else "קבוצה לא ידועה"
             
-            # שליחת התראה על כל תגובה חדשה
             for reply in new_replies:
                 try:
+                    interest = (reply.ai_analysis or {}).get("interest_level", "")
                     await self.whatsapp.send_facebook_comment_alert(
                         group_name=group_name,
                         commenter_name=reply.fb_user_name or "משתמש",
                         comment_text=reply.message or "",
-                        suggested_response=None,  # עדיין אין הצעת תשובה
-                        post_id=post.id
+                        suggested_response=reply.suggested_response,
+                        post_id=post.id,
+                        interest_level=interest
                     )
                 except Exception as e:
                     logger.warning(f"💬 ⚠️ Failed to send WhatsApp alert: {e}")
@@ -792,16 +853,101 @@ class FacebookMarketingService:
         return new_replies
     
     async def get_pending_replies(self) -> List[FacebookReply]:
-        """קבלת תגובות ממתינות לטיפול"""
+        """קבלת תגובות ממתינות לטיפול (כולל הצעות AI שמחכות לאישור)"""
         result = await self.session.execute(
             select(FacebookReply).where(
-                FacebookReply.status.in_(["new", "pending_response"])
+                FacebookReply.status.in_(["new", "pending_response", "ai_suggested"])
             ).order_by(FacebookReply.created_at.desc())
         )
         return result.scalars().all()
     
+    async def get_reply_stats(self) -> dict:
+        """סטטיסטיקות תגובות"""
+        from datetime import timedelta
+        
+        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # ספירות לפי סטטוס
+        total_result = await self.session.execute(
+            select(func.count(FacebookReply.id))
+        )
+        total = total_result.scalar_one() or 0
+        
+        pending_result = await self.session.execute(
+            select(func.count(FacebookReply.id)).where(
+                FacebookReply.status.in_(["new", "ai_suggested", "pending_response"])
+            )
+        )
+        pending = pending_result.scalar_one() or 0
+        
+        responded_today_result = await self.session.execute(
+            select(func.count(FacebookReply.id)).where(
+                and_(
+                    FacebookReply.status == "responded",
+                    FacebookReply.responded_at >= today
+                )
+            )
+        )
+        responded_today = responded_today_result.scalar_one() or 0
+        
+        ai_suggested_result = await self.session.execute(
+            select(func.count(FacebookReply.id)).where(
+                FacebookReply.status == "ai_suggested"
+            )
+        )
+        ai_suggested = ai_suggested_result.scalar_one() or 0
+        
+        responded_total_result = await self.session.execute(
+            select(func.count(FacebookReply.id)).where(
+                FacebookReply.status == "responded"
+            )
+        )
+        responded_total = responded_total_result.scalar_one() or 0
+        
+        ignored_result = await self.session.execute(
+            select(func.count(FacebookReply.id)).where(
+                FacebookReply.status == "ignored"
+            )
+        )
+        ignored = ignored_result.scalar_one() or 0
+        
+        # תגובות שהתקבלו היום
+        new_today_result = await self.session.execute(
+            select(func.count(FacebookReply.id)).where(
+                FacebookReply.created_at >= today
+            )
+        )
+        new_today = new_today_result.scalar_one() or 0
+        
+        # פירוט לפי intent
+        intent_result = await self.session.execute(
+            select(
+                FacebookReply.ai_detected_intent,
+                func.count(FacebookReply.id)
+            ).where(
+                FacebookReply.ai_detected_intent.isnot(None)
+            ).group_by(FacebookReply.ai_detected_intent)
+        )
+        intent_breakdown = {row[0]: row[1] for row in intent_result.all()}
+        
+        return {
+            "total": total,
+            "pending_approval": pending,
+            "ai_suggested": ai_suggested,
+            "responded_today": responded_today,
+            "responded_total": responded_total,
+            "ignored": ignored,
+            "new_today": new_today,
+            "intent_breakdown": intent_breakdown
+        }
+    
     async def generate_reply_response(self, reply_id: int) -> FacebookReply:
         """יצירת תשובה מוצעת לתגובה"""
+        logger.info(f"💬 generate_reply_response: reply_id={reply_id}, AI configured={self.reply_bot.is_configured}")
+        if not self.reply_bot.is_configured:
+            raise ValueError(
+                "לא הוגדר מפתח AI. הוסף OPENAI_API_KEY או ANTHROPIC_API_KEY לקובץ .env בתיקיית backend."
+            )
         result = await self.session.execute(
             select(FacebookReply).where(FacebookReply.id == reply_id)
         )
@@ -817,12 +963,25 @@ class FacebookMarketingService:
         post = post.scalar_one_or_none()
         
         # יצירת תשובה
-        response_result = await self.reply_bot.process_reply(
-            message=reply.message,
-            post_context=post.content[:200] if post else ""
-        )
+        logger.info(f"💬 Calling AI process_reply for reply {reply_id}...")
+        try:
+            response_result = await self.reply_bot.process_reply(
+                message=reply.message,
+                post_context=post.content[:200] if post else ""
+            )
+        except Exception as e:
+            logger.error(f"💬 process_reply failed: {e!s}")
+            raise
+        logger.info(f"💬 process_reply returned: keys={list(response_result.keys()) if response_result else None}")
         
-        reply.suggested_response = response_result.get("suggested_response")
+        suggested = response_result.get("suggested_response")
+        if not suggested or not str(suggested).strip():
+            logger.warning(f"💬 ⚠️ AI did not return a suggested response for reply {reply_id}; result={response_result}")
+            raise ValueError(
+                "ה-AI לא החזיר תשובה. בדוק שמפתח API (OpenAI או Anthropic) מוגדר ב-.env ונסה שוב."
+            )
+        
+        reply.suggested_response = suggested
         reply.suggested_channel = response_result.get("suggested_channel", "comment")
         reply.status = "ai_suggested"
         
@@ -854,6 +1013,9 @@ class FacebookMarketingService:
             raise ValueError("No response text provided")
         
         # שליחת התשובה
+        send_success = False
+        send_error = None
+        
         if final_channel == "messenger":
             # שליחה למסנג'ר
             if reply.fb_user_profile_url:
@@ -861,27 +1023,69 @@ class FacebookMarketingService:
                     profile_url=reply.fb_user_profile_url,
                     message=final_response
                 )
-                if not result:
+                if result:
+                    send_success = True
+                else:
+                    send_error = "Messenger send failed"
                     logger.warning(f"💬 ⚠️ Messenger send may have failed for reply {reply_id}")
+            else:
+                send_error = "No profile URL for messenger"
         else:
-            # שליחת תגובה בפייסבוק
+            # שליחת תגובה בפייסבוק - שימוש ב-Local Browser (אמין יותר מ-Apify)
             post = await self.session.execute(
                 select(FacebookPost).where(FacebookPost.id == reply.post_id)
             )
             post = post.scalar_one_or_none()
             
             if post and post.fb_post_url:
-                result = await self.apify.reply_to_comment(
+                # ניסיון ראשון: דפדפן מקומי (Playwright)
+                logger.info(f"💬 🖥️ Trying local browser for reply {reply_id}...")
+                local_browser = get_local_browser_service()
+                result = await local_browser.reply_to_comment(
                     post_url=post.fb_post_url,
                     reply_message=final_response,
                     comment_id=reply.fb_comment_id
                 )
-                if not result or not result.get("success"):
-                    logger.warning(f"💬 ⚠️ Comment reply may have failed for reply {reply_id}")
+                
+                if result and result.get("success"):
+                    send_success = True
+                    logger.info(f"💬 ✅ Reply {reply_id} sent via local browser")
+                else:
+                    local_error = result.get("error", "Unknown error") if result else "No result"
+                    logger.warning(f"💬 ⚠️ Local browser failed: {local_error}")
+                    logger.error(f"💬 ❌ דפדפן מקומי נכשל (לכן חלון לא נפתח). סיבה: {local_error}")
+                    
+                    # Fallback: Apify actor (backup)
+                    logger.info(f"💬 🔄 Falling back to Apify actor for reply {reply_id}...")
+                    result = await self.apify.reply_to_comment(
+                        post_url=post.fb_post_url,
+                        reply_message=final_response,
+                        comment_id=reply.fb_comment_id
+                    )
+                    if result and result.get("success"):
+                        send_success = True
+                        logger.info(f"💬 ✅ Reply {reply_id} sent via Apify (fallback)")
+                    elif result and result.get("manual_required"):
+                        send_error = result.get("error", "Manual posting required")
+                    else:
+                        send_error = result.get("error", "Comment reply failed") if result else "Comment reply returned None"
+                        logger.warning(f"💬 ⚠️ Both local browser and Apify failed for reply {reply_id}: {send_error}")
             else:
+                send_error = "Post URL not found"
                 logger.warning(f"💬 ⚠️ Cannot reply to comment - post URL not found for reply {reply_id}")
         
-        # עדכון
+        if not send_success:
+            # שמירת התשובה כמאושרת - ממתינה לפרסום ידני
+            reply.actual_response = final_response
+            reply.response_channel = final_channel
+            reply.status = "approved_not_sent"
+            
+            await self.session.flush()
+            
+            logger.info(f"💬 ℹ️ Reply {reply_id} approved - awaiting manual posting ({send_error})")
+            return reply, send_error
+        
+        # עדכון - רק אם השליחה הצליחה
         reply.actual_response = final_response
         reply.response_channel = final_channel
         reply.status = "responded"
@@ -890,7 +1094,7 @@ class FacebookMarketingService:
         await self.session.flush()
         
         logger.info(f"💬 ✅ Response sent for reply {reply_id} via {final_channel}")
-        return reply
+        return reply, None
     
     # ========== Statistics ==========
     

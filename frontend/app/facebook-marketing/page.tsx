@@ -11,6 +11,7 @@ interface Group {
   category: string | null;
   member_count: number;
   is_active: boolean;
+  auto_reply_enabled: boolean;
   total_posts: number;
   total_replies_received: number;
   last_post_at: string | null;
@@ -141,15 +142,12 @@ interface Stats {
   };
 }
 
-// Use relative URL for production (nginx proxy) or localhost for development
-const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost' 
-  ? '/api/facebook' 
-  : 'http://localhost:8001/api/facebook';
+// Use relative URL for production (nginx proxy); use backend for local dev (localhost / 127.0.0.1)
+const isLocalDev = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+const API_BASE = isLocalDev ? 'http://localhost:8000/api/facebook' : '/api/facebook';
 
 // Main API base for non-facebook endpoints (strategies, calculators)
-const API_MAIN = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
-  ? '/api'
-  : 'http://localhost:8001/api';
+const API_MAIN = isLocalDev ? 'http://localhost:8000/api' : '/api';
 
 // Tab Component
 const TabButton: React.FC<{
@@ -187,13 +185,31 @@ const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
     new: 'bg-yellow-100 text-yellow-700',
     ai_suggested: 'bg-purple-100 text-purple-700',
     responded: 'bg-green-100 text-green-700',
+    approved_not_sent: 'bg-orange-100 text-orange-700',
+    ignored: 'bg-gray-100 text-gray-500',
     generating: 'bg-blue-100 text-blue-700',
     ready: 'bg-green-100 text-green-700',
+  };
+
+  const labels: Record<string, string> = {
+    draft: 'טיוטה',
+    pending_approval: 'ממתין לאישור',
+    approved: 'מאושר',
+    published: 'פורסם',
+    failed: 'נכשל',
+    rejected: 'נדחה',
+    new: 'חדש',
+    ai_suggested: 'הצעת AI',
+    responded: 'נענה',
+    approved_not_sent: 'ממתין לפרסום',
+    ignored: 'לא רלוונטי',
+    generating: 'בייצור',
+    ready: 'מוכן',
   };
   
   return (
     <span className={`px-2 py-1 rounded text-xs font-medium ${colors[status] || 'bg-gray-100 text-gray-600'}`}>
-      {status.replace('_', ' ')}
+      {labels[status] || status.replace('_', ' ')}
     </span>
   );
 };
@@ -221,6 +237,9 @@ const FeedTab: React.FC<{
   onRegenerateForGroup: (campaignId: number, groupId: number) => Promise<void>;
   onGenerateResponse: (id: number) => Promise<void>;
   onSendResponse: (id: number, text?: string, channel?: string) => Promise<void>;
+  onMarkResponded: (id: number) => Promise<void>;
+  onSyncComments: (postId: number) => Promise<void>;
+  loadingSyncPostId: number | null;
   onDebugPost: (id: number) => Promise<void>;
   availableModels: { id: string; name: string }[];
 }> = ({
@@ -245,6 +264,9 @@ const FeedTab: React.FC<{
   onRegenerateForGroup,
   onGenerateResponse,
   onSendResponse,
+  onMarkResponded,
+  onSyncComments,
+  loadingSyncPostId,
   onDebugPost,
   availableModels,
 }) => {
@@ -315,7 +337,7 @@ const FeedTab: React.FC<{
     const counts: Record<number, number> = {};
     posts.forEach(post => {
       if (post.campaign_id) {
-        const postReplies = replies.filter(r => r.post_id === post.id && r.status !== 'responded');
+        const postReplies = replies.filter(r => r.post_id === post.id && !['responded', 'ignored'].includes(r.status));
         counts[post.campaign_id] = (counts[post.campaign_id] || 0) + postReplies.length;
       }
     });
@@ -783,9 +805,20 @@ const FeedTab: React.FC<{
                               )}
 
                               {/* Replies Section */}
-                              {postReplies.length > 0 && (
-                                <div className="bg-blue-50 p-3 rounded border border-blue-200">
-                                  <h4 className="font-medium text-sm mb-2">💬 תגובות ({postReplies.length})</h4>
+                              <div className="bg-blue-50 p-3 rounded border border-blue-200">
+                                <div className="flex items-center justify-between gap-2 mb-2">
+                                  <h4 className="font-medium text-sm">💬 תגובות ({postReplies.length})</h4>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); onSyncComments(post.id); }}
+                                    disabled={loadingSyncPostId === post.id}
+                                    className={`px-2 py-1 text-xs rounded ${loadingSyncPostId === post.id ? 'bg-gray-300' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                                    title="משוך תגובות חדשות מפייסבוק"
+                                  >
+                                    {loadingSyncPostId === post.id ? '⏳ מרענן...' : '🔄 רענן תגובות'}
+                                  </button>
+                                </div>
+                                {postReplies.length > 0 && (
                                   <div className="space-y-2">
                                     {postReplies.map((reply) => (
                                       <div key={reply.id} className={`p-2 rounded text-sm ${
@@ -797,7 +830,7 @@ const FeedTab: React.FC<{
                                             <StatusBadge status={reply.status} />
                                           </div>
                                           <div className="flex gap-1">
-                                            {reply.status === 'new' && (
+                                            {(reply.status === 'new' || ((reply.status === 'ai_suggested' || reply.status === 'approved_not_sent') && !reply.suggested_response && !reply.actual_response)) && (
                                               <button
                                                 onClick={async () => {
                                                   setLoadingGenerate(reply.id);
@@ -810,16 +843,17 @@ const FeedTab: React.FC<{
                                                     ? 'bg-gray-300'
                                                     : 'bg-purple-600 text-white'
                                                 }`}
+                                                title="יצירת הצעת תשובה אוטומטית מ-AI"
                                               >
                                                 {loadingGenerate === reply.id ? '⏳' : '🤖 צור תשובה'}
                                               </button>
                                             )}
-                                            {reply.status === 'ai_suggested' && (
+                                            {(reply.status === 'ai_suggested' || reply.status === 'approved_not_sent') && (reply.suggested_response || reply.actual_response) && (
                                               <>
                                                 <button
                                                   onClick={() => {
                                                     setEditingReplyId(reply.id);
-                                                    setEditReplyResponse(reply.suggested_response || '');
+                                                    setEditReplyResponse(reply.suggested_response || reply.actual_response || '');
                                                   }}
                                                   className="px-2 py-1 bg-blue-600 text-white text-xs rounded"
                                                 >
@@ -827,18 +861,16 @@ const FeedTab: React.FC<{
                                                 </button>
                                                 <button
                                                   onClick={async () => {
+                                                    const text = reply.actual_response || reply.suggested_response || '';
+                                                    await navigator.clipboard.writeText(text);
                                                     setLoadingSend(reply.id);
-                                                    await onSendResponse(reply.id);
+                                                    await onSendResponse(reply.id, text, 'comment');
                                                     setLoadingSend(null);
                                                   }}
                                                   disabled={loadingSend === reply.id}
-                                                  className={`px-2 py-1 text-xs rounded ${
-                                                    loadingSend === reply.id
-                                                      ? 'bg-gray-300'
-                                                      : 'bg-green-600 text-white'
-                                                  }`}
+                                                  className="px-2 py-1 bg-green-600 text-white text-xs rounded"
                                                 >
-                                                  {loadingSend === reply.id ? '⏳' : '📤 שלח'}
+                                                  {loadingSend === reply.id ? '...' : '✅ אשר'}
                                                 </button>
                                               </>
                                             )}
@@ -848,6 +880,43 @@ const FeedTab: React.FC<{
                                         {reply.suggested_response && (
                                           <div className="mt-1 p-2 bg-purple-50 rounded text-purple-800 text-xs">
                                             💡 {reply.suggested_response}
+                                          </div>
+                                        )}
+                                        {reply.status === 'approved_not_sent' && reply.actual_response && (
+                                          <div className="mt-1 p-2 bg-orange-50 rounded text-orange-800 text-xs border border-orange-200">
+                                            <div className="font-semibold mb-1">📋 התגובה הועתקה - פרסמו בפייסבוק:</div>
+                                            <div className="mt-1 mb-2 p-2 bg-white rounded border font-medium text-gray-800">{reply.actual_response}</div>
+                                            <div className="flex gap-2 flex-wrap items-center">
+                                              <button
+                                                onClick={async () => {
+                                                  await navigator.clipboard.writeText(reply.actual_response || '');
+                                                }}
+                                                className="px-3 py-1 bg-yellow-500 text-white text-xs rounded font-medium"
+                                              >
+                                                📋 העתק שוב
+                                              </button>
+                                              {posts.find(p => p.id === reply.post_id)?.fb_post_url && (
+                                                <a
+                                                  href={posts.find(p => p.id === reply.post_id)?.fb_post_url}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  className="px-3 py-1 bg-blue-600 text-white text-xs rounded font-medium inline-block"
+                                                >
+                                                  🔗 פתח בפייסבוק
+                                                </a>
+                                              )}
+                                              <button
+                                                onClick={() => onMarkResponded(reply.id)}
+                                                className="px-3 py-1 bg-green-600 text-white text-xs rounded font-medium"
+                                              >
+                                                ✅ פרסמתי - סמן כנענה
+                                              </button>
+                                            </div>
+                                          </div>
+                                        )}
+                                        {reply.status === 'responded' && reply.actual_response && (
+                                          <div className="mt-1 p-2 bg-green-50 rounded text-green-800 text-xs">
+                                            ✅ נשלח: {reply.actual_response}
                                           </div>
                                         )}
                                         
@@ -893,8 +962,8 @@ const FeedTab: React.FC<{
                                       </div>
                                     ))}
                                   </div>
-                                </div>
-                              )}
+                                )}
+                              </div>
                             </div>
                           )}
                         </div>
@@ -1563,17 +1632,46 @@ const GroupsTab: React.FC<{
   onAdd: (data: Partial<Group>) => void;
   onSearch: (query: string) => void;
   onRemove: (groupId: number) => void;
-}> = ({ groups, onAdd, onSearch, onRemove }) => {
+  onUpdate: (groupId: number, data: Partial<Group>) => void;
+}> = ({ groups, onAdd, onSearch, onRemove, onUpdate }) => {
   const [showAddForm, setShowAddForm] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [formData, setFormData] = useState({ fb_group_id: '', name: '', url: '', category: '' });
   const [removingId, setRemovingId] = useState<number | null>(null);
+  const [editingGroup, setEditingGroup] = useState<Group | null>(null);
+  const [editFormData, setEditFormData] = useState({ name: '', url: '', category: '', is_active: true, auto_reply_enabled: true });
+
+  const extractGroupId = (url: string): string => {
+    const match = url.match(/facebook\.com\/groups\/([^/?&#]+)/);
+    return match ? match[1] : '';
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onAdd(formData);
+    const groupId = extractGroupId(formData.url);
+    if (!groupId) return;
+    onAdd({ ...formData, fb_group_id: groupId });
     setFormData({ fb_group_id: '', name: '', url: '', category: '' });
     setShowAddForm(false);
+  };
+
+  const startEditing = (group: Group) => {
+    setEditingGroup(group);
+    setEditFormData({
+      name: group.name,
+      url: group.url || '',
+      category: group.category || '',
+      is_active: group.is_active,
+      auto_reply_enabled: group.auto_reply_enabled ?? true,
+    });
+  };
+
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingGroup) {
+      onUpdate(editingGroup.id, editFormData);
+      setEditingGroup(null);
+    }
   };
 
   return (
@@ -1615,11 +1713,11 @@ const GroupsTab: React.FC<{
           <h3 className="font-bold">הוספת קבוצה ידנית</h3>
           <div className="grid grid-cols-2 gap-4">
             <input
-              type="text"
-              placeholder="מזהה קבוצה"
-              value={formData.fb_group_id}
-              onChange={(e) => setFormData({ ...formData, fb_group_id: e.target.value })}
-              className="border rounded px-3 py-2"
+              type="url"
+              placeholder="קישור לקבוצה (https://www.facebook.com/groups/...)"
+              value={formData.url}
+              onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+              className="border rounded px-3 py-2 col-span-2"
               required
             />
             <input
@@ -1632,19 +1730,18 @@ const GroupsTab: React.FC<{
             />
             <input
               type="text"
-              placeholder="URL"
-              value={formData.url}
-              onChange={(e) => setFormData({ ...formData, url: e.target.value })}
-              className="border rounded px-3 py-2"
-            />
-            <input
-              type="text"
               placeholder="קטגוריה"
               value={formData.category}
               onChange={(e) => setFormData({ ...formData, category: e.target.value })}
               className="border rounded px-3 py-2"
             />
           </div>
+          {formData.url && !extractGroupId(formData.url) && (
+            <p className="text-xs text-red-500">לא ניתן לחלץ מזהה קבוצה מה-URL. ודא שהקישור בפורמט facebook.com/groups/...</p>
+          )}
+          {formData.url && extractGroupId(formData.url) && (
+            <p className="text-xs text-green-600">מזהה קבוצה: {extractGroupId(formData.url)}</p>
+          )}
           <div className="flex gap-2">
             <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded">
               הוסף
@@ -1671,46 +1768,124 @@ const GroupsTab: React.FC<{
           </thead>
           <tbody className="divide-y">
             {groups.map((group) => (
-              <tr key={group.id} className="hover:bg-gray-50">
-                <td className="px-4 py-3">
-                  <div className="font-medium">{group.name}</div>
-                  <div className="text-xs text-gray-500">{group.fb_group_id}</div>
-                </td>
-                <td className="px-4 py-3 text-sm">{group.category || '-'}</td>
-                <td className="px-4 py-3 text-sm">{group.member_count.toLocaleString()}</td>
-                <td className="px-4 py-3 text-sm">{group.total_posts}</td>
-                <td className="px-4 py-3">
-                  <span className={`px-2 py-1 rounded text-xs ${group.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                    {group.is_active ? 'פעילה' : 'לא פעילה'}
-                  </span>
-                </td>
-                <td className="px-4 py-3">
-                  {removingId === group.id ? (
-                    <div className="flex gap-1 items-center">
-                      <span className="text-xs text-red-600">בטוח?</span>
+              <React.Fragment key={group.id}>
+                <tr className="hover:bg-gray-50">
+                  <td className="px-4 py-3">
+                    <div className="font-medium">{group.name}</div>
+                    <div className="text-xs text-gray-500">{group.fb_group_id}</div>
+                  </td>
+                  <td className="px-4 py-3 text-sm">{group.category || '-'}</td>
+                  <td className="px-4 py-3 text-sm">{group.member_count.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-sm">{group.total_posts}</td>
+                  <td className="px-4 py-3">
+                    <span className={`px-2 py-1 rounded text-xs ${group.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                      {group.is_active ? 'פעילה' : 'לא פעילה'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-1">
                       <button
-                        onClick={() => { onRemove(group.id); setRemovingId(null); }}
-                        className="px-2 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700"
+                        onClick={() => startEditing(group)}
+                        className="px-2 py-1 bg-blue-100 text-blue-600 rounded text-xs hover:bg-blue-200"
+                        title="ערוך"
                       >
-                        כן
+                        ✏️ ערוך
                       </button>
-                      <button
-                        onClick={() => setRemovingId(null)}
-                        className="px-2 py-1 bg-gray-200 rounded text-xs hover:bg-gray-300"
-                      >
-                        לא
-                      </button>
+                      {removingId === group.id ? (
+                        <div className="flex gap-1 items-center">
+                          <span className="text-xs text-red-600">בטוח?</span>
+                          <button
+                            onClick={() => { onRemove(group.id); setRemovingId(null); }}
+                            className="px-2 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700"
+                          >
+                            כן
+                          </button>
+                          <button
+                            onClick={() => setRemovingId(null)}
+                            className="px-2 py-1 bg-gray-200 rounded text-xs hover:bg-gray-300"
+                          >
+                            לא
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setRemovingId(group.id)}
+                          className="px-2 py-1 bg-red-100 text-red-600 rounded text-xs hover:bg-red-200"
+                        >
+                          הסר
+                        </button>
+                      )}
                     </div>
-                  ) : (
-                    <button
-                      onClick={() => setRemovingId(group.id)}
-                      className="px-2 py-1 bg-red-100 text-red-600 rounded text-xs hover:bg-red-200"
-                    >
-                      הסר
-                    </button>
-                  )}
-                </td>
-              </tr>
+                  </td>
+                </tr>
+                {editingGroup?.id === group.id && (
+                  <tr>
+                    <td colSpan={6} className="px-0 py-0">
+                      <form onSubmit={handleEditSubmit} className="bg-white p-4 shadow-inner border-t border-b border-blue-100 space-y-4">
+                        <h4 className="font-bold text-sm text-blue-700">✏️ עריכת קבוצה: {group.name}</h4>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">שם הקבוצה</label>
+                            <input
+                              type="text"
+                              value={editFormData.name}
+                              onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                              className="w-full border rounded px-3 py-2 text-sm"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">URL</label>
+                            <input
+                              type="text"
+                              value={editFormData.url}
+                              onChange={(e) => setEditFormData({ ...editFormData, url: e.target.value })}
+                              className="w-full border rounded px-3 py-2 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">קטגוריה</label>
+                            <input
+                              type="text"
+                              value={editFormData.category}
+                              onChange={(e) => setEditFormData({ ...editFormData, category: e.target.value })}
+                              className="w-full border rounded px-3 py-2 text-sm"
+                            />
+                          </div>
+                          <div className="flex items-end gap-6">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={editFormData.is_active}
+                                onChange={(e) => setEditFormData({ ...editFormData, is_active: e.target.checked })}
+                                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                              />
+                              <span className="text-sm">פעילה</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={editFormData.auto_reply_enabled}
+                                onChange={(e) => setEditFormData({ ...editFormData, auto_reply_enabled: e.target.checked })}
+                                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                              />
+                              <span className="text-sm">מענה אוטומטי</span>
+                            </label>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">
+                            שמור
+                          </button>
+                          <button type="button" onClick={() => setEditingGroup(null)} className="px-4 py-2 bg-gray-200 rounded text-sm hover:bg-gray-300">
+                            ביטול
+                          </button>
+                        </div>
+                      </form>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
             ))}
           </tbody>
         </table>
@@ -2850,10 +3025,9 @@ const PostsTab: React.FC<{
   const [debugInfo, setDebugInfo] = useState<PostDebugInfo | null>(null);
   const [loadingDebug, setLoadingDebug] = useState(false);
   
-  // API base URL
-  const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
-    ? 'https://api.partnercalc.com/api/facebook'
-    : 'http://localhost:8001/api/facebook';
+  // API base URL (same logic as top-level API_BASE)
+  const _isLocalDev = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+  const API_BASE = _isLocalDev ? 'http://localhost:8000/api/facebook' : '/api/facebook';
   
   // 🐞 DEBUG: Fetch AI prompt debug info for a post
   const fetchPostDebugInfo = async (postId: number) => {
@@ -3656,8 +3830,13 @@ export default function FacebookMarketingPage() {
     hasEssentialCookies: boolean;
     cookieCount: number;
     lastUpdated: string | null;
+    profiles?: { id: number; name: string; is_active: boolean; updated_at: string | null }[];
+    activeProfile?: { id: number; name: string } | null;
   } | null>(null);
   const [uploadingCookie, setUploadingCookie] = useState(false);
+  const [newProfileName, setNewProfileName] = useState('');
+  const [settingActiveProfileId, setSettingActiveProfileId] = useState<number | null>(null);
+  const [creatingProfile, setCreatingProfile] = useState(false);
   const cookieFileRef = React.useRef<HTMLInputElement>(null);
   const [cookieLoginPending, setCookieLoginPending] = useState<number | null>(null);
   const cookieLoginPollRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -3674,6 +3853,7 @@ export default function FacebookMarketingPage() {
     created_at: string | null;
   } | null>(null);
   const [loadingDebug, setLoadingDebug] = useState(false);
+  const [loadingSyncPostId, setLoadingSyncPostId] = useState<number | null>(null);
 
   // Fetch data - resilient to individual failures
   const fetchData = async () => {
@@ -3747,6 +3927,48 @@ export default function FacebookMarketingPage() {
     }
   };
 
+  const setActiveProfile = async (profileId: number) => {
+    setSettingActiveProfileId(profileId);
+    try {
+      const res = await fetch(`${API_BASE}/profiles/${profileId}/set-active`, { method: 'PUT' });
+      if (res.ok) await fetchCookieStatus();
+      else setError('שגיאה בהגדרת פרופיל פעיל');
+    } catch (e) {
+      setError('שגיאת רשת');
+    } finally {
+      setSettingActiveProfileId(null);
+    }
+  };
+
+  const createProfile = async () => {
+    const name = newProfileName.trim() || 'פרופיל חדש';
+    setCreatingProfile(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/profiles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (res.ok) {
+        setNewProfileName('');
+        await fetchCookieStatus();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        const msg = d.detail || res.statusText;
+        if (res.status === 404) {
+          setError('השרת לא מכיר את נתיב הפרופילים (404). וודאי שהבקאנד רץ על פורט 8000 והקוד מעודכן.');
+        } else {
+          setError(typeof msg === 'string' ? msg : (msg.message || 'שגיאה ביצירת פרופיל'));
+        }
+      }
+    } catch (e) {
+      setError('שגיאת רשת – וודאי שהבקאנד רץ (למשל http://localhost:8000).');
+    } finally {
+      setCreatingProfile(false);
+    }
+  };
+
   // Cookie upload handler
   const handleCookieUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -3812,6 +4034,27 @@ export default function FacebookMarketingPage() {
       if (res.ok) {
         const newGroup = await res.json();
         setGroups([...groups, newGroup]);
+      } else {
+        const errData = await res.json().catch(() => null);
+        const msg = errData?.detail || `שגיאה בהוספת קבוצה (${res.status})`;
+        alert(msg);
+      }
+    } catch (err) {
+      console.error(err);
+      alert('שגיאת רשת - לא ניתן להתחבר לשרת');
+    }
+  };
+
+  const updateGroup = async (groupId: number, data: Partial<Group>) => {
+    try {
+      const res = await fetch(`${API_BASE}/groups/${groupId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setGroups(groups.map(g => g.id === groupId ? updated : g));
       }
     } catch (err) {
       console.error(err);
@@ -4286,18 +4529,30 @@ export default function FacebookMarketingPage() {
   };
 
   const generateReplyResponse = async (replyId: number) => {
+    setError(null);
     try {
       const res = await fetch(`${API_BASE}/replies/${replyId}/generate`, { method: 'POST' });
       if (res.ok) {
         const updatedReply = await res.json();
         setReplies(replies.map((r) => (r.id === replyId ? updatedReply : r)));
+        if (!updatedReply.suggested_response?.trim()) {
+          setError('המערכת לא החזירה טקסט תשובה. נסה שוב או בדוק את מפתח ה-AI ב-.env');
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        let msg = errData.detail;
+        if (Array.isArray(msg)) msg = msg[0]?.msg ?? msg[0] ?? msg;
+        if (typeof msg !== 'string') msg = res.status === 503 ? 'ה-AI לא החזיר תשובה. בדוק מפתח API (OpenAI/Anthropic) ב-.env' : 'יצירת התשובה נכשלה';
+        setError(`❌ ${msg}`);
       }
     } catch (err) {
       console.error(err);
+      setError('❌ שגיאת רשת – לא ניתן ליצור תשובה. בדוק שהשרת רץ ומפתח ה-AI מוגדר.');
     }
   };
 
   const sendReplyResponse = async (replyId: number, text?: string, channel?: string) => {
+    setError(null);
     try {
       const res = await fetch(`${API_BASE}/replies/${replyId}/respond`, {
         method: 'POST',
@@ -4307,9 +4562,49 @@ export default function FacebookMarketingPage() {
       if (res.ok) {
         const updatedReply = await res.json();
         setReplies(replies.map((r) => (r.id === replyId ? updatedReply : r)));
+        if (updatedReply.status === 'approved_not_sent') {
+          const serverReason = res.headers.get('X-Send-Error');
+          const msg = serverReason
+            ? `⚠️ התגובה אושרה אך לא פורסמה. סיבה: ${serverReason}`
+            : '⚠️ התגובה אושרה אך לא פורסמה אוטומטית. אפשר להעתיק את הטקסט ולפרסם ידנית.';
+          setError(msg);
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setError(`❌ ${errData.detail || 'שליחת התגובה נכשלה'}`);
+        const refreshRes = await fetch(`${API_BASE}/replies`);
+        if (refreshRes.ok) setReplies(await refreshRes.json());
       }
     } catch (err) {
       console.error(err);
+      setError('❌ שגיאת רשת – לא ניתן לשלוח את התגובה.');
+    }
+  };
+
+  const markReplyAsResponded = async (replyId: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/replies/${replyId}/mark-responded`, { method: 'POST' });
+      if (res.ok) {
+        const updatedReply = await res.json();
+        setReplies(replies.map((r) => (r.id === replyId ? updatedReply : r)));
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const syncPostComments = async (postId: number) => {
+    setLoadingSyncPostId(postId);
+    try {
+      const res = await fetch(`${API_BASE}/posts/${postId}/sync-comments`, { method: 'POST' });
+      if (res.ok) {
+        const refreshRes = await fetch(`${API_BASE}/replies`);
+        if (refreshRes.ok) setReplies(await refreshRes.json());
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingSyncPostId(null);
     }
   };
 
@@ -4424,6 +4719,56 @@ export default function FacebookMarketingPage() {
         </div>
       )}
 
+      {/* 🧑 פרופיל פרסום פעיל – מעבר בין יוזרים */}
+      {cookieStatus && (
+        <div className="mx-4 mt-4 p-4 bg-gray-50 border border-gray-200 rounded">
+          <div className="text-sm font-semibold text-gray-700 mb-2">פרופיל פרסום פעיל</div>
+          <p className="text-xs text-gray-500 mb-2">
+            {(cookieStatus?.profiles?.length ?? 0) === 0
+              ? 'הוסף פרופיל כדי להפריד בין חשבונות (למשל שלי / אייל). הפרסום והסנכרון ישתמשו בפרופיל שנבחר.'
+              : 'הפרסום והסנכרון משתמשים בפרופיל שנבחר. החלף כדי לעבוד מפייסבוק אחר (למשל שלי / אייל).'}
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            {(cookieStatus?.profiles ?? []).map((p) => (
+              <span
+                key={p.id}
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm ${
+                  p.is_active ? 'bg-green-100 text-green-800 border border-green-300' : 'bg-white border border-gray-300 text-gray-700'
+                }`}
+              >
+                <span>{p.name}</span>
+                {p.is_active && <span className="text-xs">(פעיל)</span>}
+                {!p.is_active && (
+                  <button
+                    onClick={() => setActiveProfile(p.id)}
+                    disabled={settingActiveProfileId !== null}
+                    className="text-blue-600 hover:underline text-xs disabled:opacity-50"
+                  >
+                    {settingActiveProfileId === p.id ? '...' : 'הגדר כפעיל'}
+                  </button>
+                )}
+              </span>
+            ))}
+            <div className="flex items-center gap-1">
+              <input
+                type="text"
+                value={newProfileName}
+                onChange={(e) => setNewProfileName(e.target.value)}
+                placeholder="שם פרופיל (למשל שלי)"
+                className="border border-gray-300 rounded px-2 py-1 text-sm w-36"
+              />
+              <button
+                onClick={createProfile}
+                disabled={creatingProfile || !newProfileName.trim()}
+                className="bg-gray-600 hover:bg-gray-500 text-white text-sm px-2 py-1 rounded disabled:opacity-50"
+              >
+                {creatingProfile ? '...' : 'הוסף פרופיל'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="bg-white border-b px-4 flex gap-2 overflow-x-auto">
         <TabButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')}>
@@ -4447,7 +4792,7 @@ export default function FacebookMarketingPage() {
       {/* Content */}
       <div className="p-4">
         {activeTab === 'dashboard' && <DashboardTab stats={stats} onRefresh={fetchData} />}
-        {activeTab === 'groups' && <GroupsTab groups={groups} onAdd={addGroup} onSearch={searchGroups} onRemove={removeGroup} />}
+        {activeTab === 'groups' && <GroupsTab groups={groups} onAdd={addGroup} onSearch={searchGroups} onRemove={removeGroup} onUpdate={updateGroup} />}
         {activeTab === 'feed' && (
           <FeedTab
             campaigns={campaigns}
@@ -4471,6 +4816,9 @@ export default function FacebookMarketingPage() {
             onRegenerateForGroup={regenerateForGroup}
             onGenerateResponse={generateReplyResponse}
             onSendResponse={sendReplyResponse}
+            onMarkResponded={markReplyAsResponded}
+            onSyncComments={syncPostComments}
+            loadingSyncPostId={loadingSyncPostId}
             onDebugPost={debugPost}
             availableModels={availableModels}
           />

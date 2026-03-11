@@ -74,17 +74,24 @@ class AutoReplySettings(Base):
 
 class PendingReply(Base):
     """
-    טבלת תשובות ממתינות לאישור
+    טבלת תשובות ממתינות לאישור - תומכת בכל הערוצים.
     
     סטטוסים: pending, approved, rejected, auto_sent
+    ערוצים: email, whatsapp, sms, facebook_comment, facebook_messenger
     """
     __tablename__ = "pending_replies"
     
     id = Column(Integer, primary_key=True, index=True)
     
+    # ערוץ התקשורת (email, whatsapp, sms, facebook_comment, facebook_messenger)
+    channel = Column(String(30), default="email", comment="ערוץ: email, whatsapp, sms, facebook_comment, facebook_messenger")
+    
     # קשר להודעה המקורית (אופציונלי - יכול להיות מתרחיש)
     communication_id = Column(Integer, ForeignKey("communication.id"), nullable=True)
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=True)
+    
+    # קשר לתגובת פייסבוק (אופציונלי)
+    facebook_reply_id = Column(Integer, nullable=True, comment="מזהה FacebookReply אם הערוץ הוא פייסבוק")
     
     # מידע על התרחיש
     scenario_name = Column(String(100), comment="שם התרחיש שהתאים")
@@ -103,6 +110,7 @@ class PendingReply(Base):
     trigger_message = Column(Text, comment="ההודעה שהפעילה את התרחיש")
     trigger_subject = Column(String(500), comment="נושא ההודעה המקורית")
     sender_email = Column(String(200), comment="כתובת השולח")
+    sender_name = Column(String(200), comment="שם השולח")
     
     # סטטוס
     status = Column(String(20), default="pending")
@@ -116,4 +124,4 @@ class PendingReply(Base):
     lead = relationship("Lead")
     
     def __repr__(self):
-        return f"<PendingReply(id={self.id}, status='{self.status}', scenario='{self.scenario_name}')>"
+        return f"<PendingReply(id={self.id}, channel='{self.channel}', status='{self.status}', scenario='{self.scenario_name}')>"

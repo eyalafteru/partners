@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any, List
 from loguru import logger
 
 from app.config import settings, reload_settings
+from app.services.facebook_cookie_resolver import get_facebook_cookies_for_publishing
 
 
 class ApifyService:
@@ -25,15 +26,30 @@ class ApifyService:
         self.fb_messenger_actor = settings.apify_fb_messenger_actor
         self.fb_groups_scraper = settings.apify_fb_groups_scraper
         
-        # Facebook cookies - JSON array format only
+        # Facebook cookies - try DB first, fallback to .env
         self.facebook_cookie = settings.facebook_cookie
+        self._load_cookies_from_db()
     
+    def _load_cookies_from_db(self):
+        """טעינת cookies לפרסום: פרופיל פעיל, אחרת legacy storage / .env"""
+        cookie_str, profile_name = get_facebook_cookies_for_publishing()
+        if cookie_str:
+            self.facebook_cookie = cookie_str
+            src = f"profile '{profile_name}'" if profile_name else "DB/env"
+            logger.info(f"🍪 Cookies loaded from {src}")
+            return True
+        return False
+
     def reload_cookies(self):
-        """טעינה מחדש של cookies מהגדרות (אחרי עדכון .env)"""
+        """טעינה מחדש של cookies (פרופיל פעיל) והגדרות Actor"""
+        if self._load_cookies_from_db():
+            new_settings = reload_settings()
+            self.fb_poster_custom_actor = new_settings.apify_fb_poster_custom_actor
+            return
         new_settings = reload_settings()
         self.facebook_cookie = new_settings.facebook_cookie
         self.fb_poster_custom_actor = new_settings.apify_fb_poster_custom_actor
-        logger.info("🍪 Cookies reloaded from settings")
+        logger.info("🍪 Cookies reloaded from .env settings")
     
     @property
     def is_configured(self) -> bool:
@@ -94,6 +110,17 @@ class ApifyService:
         except:
             logger.error("Failed to parse Facebook cookie")
             return []
+    
+    def get_own_fb_user_id(self) -> Optional[str]:
+        """זיהוי ה-Facebook user ID שלנו מתוך ה-cookies (c_user)"""
+        try:
+            cookies = self._parse_cookie()
+            for c in cookies:
+                if c.get("name") == "c_user":
+                    return c.get("value")
+        except:
+            pass
+        return None
     
     def _get_cookie_string(self) -> str:
         """קבלת cookie בפורמט string"""
@@ -305,7 +332,7 @@ class ApifyService:
         self,
         post_urls: List[str],
         max_comments: int = 100,
-        sort_by: str = "newest"
+        sort_by: str = "RANKED_UNFILTERED"
     ) -> Optional[Dict[str, Any]]:
         """
         סריקת תגובות מפוסטים
@@ -313,7 +340,7 @@ class ApifyService:
         Args:
             post_urls: רשימת URLs של פוסטים
             max_comments: מקסימום תגובות לסרוק
-            sort_by: מיון (newest, most_relevant)
+            sort_by: מיון (RANKED_UNFILTERED = non-filtered, newest, most_relevant)
             
         Returns:
             run info
@@ -338,11 +365,92 @@ class ApifyService:
         max_comments: int = 50
     ) -> Optional[List[Dict[str, Any]]]:
         """
-        קבלת תגובות מפוסט ספציפי
+        קבלת תגובות מפוסט ספציפי.
+        מנסה קודם את ה-Actor המותאם שלנו (Playwright + cookies),
+        ואם לא מוגדר - נופל ל-Apify public scraper.
         
         Returns:
             רשימת תגובות
         """
+        # רענון cookies מ-DB (וודא שיש את העדכניים ביותר)
+        self._load_cookies_from_db()
+        
+        # ===== ניסיון 1: Custom Playwright actor (אמין יותר) =====
+        current_settings = reload_settings()
+        custom_actor = current_settings.apify_fb_comment_reply_actor
+        logger.info(f"🎭 get_post_comments v2: custom_actor={custom_actor!r}, has_cookie={self.has_facebook_cookie}")
+        
+        if custom_actor and self.has_facebook_cookie:
+            logger.info(f"🎭 Using custom Playwright scraper: {custom_actor}")
+            try:
+                comments = await self._scrape_with_custom_actor(custom_actor, post_url)
+                if comments and len(comments) > 0:
+                    logger.info(f"🎭 ✅ Custom scraper found {len(comments)} comments")
+                    return comments
+                else:
+                    logger.warning("🎭 ⚠️ Custom scraper returned no comments, falling back to public scraper")
+            except Exception as e:
+                logger.warning(f"🎭 ⚠️ Custom scraper failed: {e}, falling back to public scraper")
+        
+        # ===== ניסיון 2: Apify public scraper (fallback) =====
+        logger.info("🎭 Using Apify public comments scraper (fallback)")
+        return await self._scrape_with_public_actor(post_url, max_comments)
+    
+    async def _scrape_with_custom_actor(
+        self,
+        actor_id: str,
+        post_url: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        """סריקת תגובות באמצעות ה-Actor המותאם שלנו (Playwright + cookies)"""
+        input_data = {
+            "postUrl": post_url,
+            "mode": "scrape",
+            "cookies": self._parse_cookie(),
+            "proxyConfiguration": {
+                "useApifyProxy": True,
+                "apifyProxyGroups": ["RESIDENTIAL"],
+                "apifyProxyCountry": "IL"
+            }
+        }
+        
+        run_info = await self.run_actor(
+            actor_id=actor_id,
+            input_data=input_data,
+            wait_for_finish=True,
+            timeout_secs=120
+        )
+        
+        if not run_info:
+            return None
+        
+        run_id = run_info.get("id")
+        if not run_id:
+            return None
+        
+        # אם עדיין רץ, ממתינים
+        run_status = run_info.get("status", "")
+        if run_status not in ["SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"]:
+            logger.info(f"🎭 Custom scraper still running, polling...")
+            final_status = await self.wait_for_run(run_id, max_wait_seconds=120, poll_interval=5.0)
+            if not final_status or final_status.get("status") != "SUCCEEDED":
+                logger.warning(f"🎭 ⚠️ Custom scraper did not succeed")
+                return None
+        
+        results = await self.get_run_dataset(run_id)
+        
+        if not results:
+            return None
+        
+        # סינון תוצאות שגיאה (שורות עם success: false)
+        comments = [r for r in results if not r.get("error") and r.get("profileName")]
+        return comments if comments else None
+    
+    async def _scrape_with_public_actor(
+        self,
+        post_url: str,
+        max_comments: int = 50
+    ) -> Optional[List[Dict[str, Any]]]:
+        """סריקת תגובות באמצעות ה-Apify public scraper (fallback)"""
         run_info = await self.scrape_post_comments(
             post_urls=[post_url],
             max_comments=max_comments
@@ -355,8 +463,32 @@ class ApifyService:
         if not run_id:
             return None
         
-        # קבלת התוצאות
-        return await self.get_run_dataset(run_id)
+        # אם ה-run עדיין רץ, ממתינים
+        run_status = run_info.get("status", "")
+        if run_status not in ["SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"]:
+            logger.info(f"🎭 Public scraper still running ({run_status}), polling...")
+            final_status = await self.wait_for_run(run_id, max_wait_seconds=180, poll_interval=5.0)
+            if not final_status or final_status.get("status") != "SUCCEEDED":
+                logger.warning(f"🎭 ⚠️ Public scraper did not succeed")
+        
+        raw_comments = await self.get_run_dataset(run_id)
+        
+        if not raw_comments:
+            return None
+        
+        # Flatten: חילוץ תת-תגובות
+        all_comments = []
+        for comment in raw_comments:
+            all_comments.append(comment)
+            sub_comments = comment.get("comments", [])
+            if sub_comments:
+                for sub in sub_comments:
+                    if "inputUrl" not in sub:
+                        sub["inputUrl"] = comment.get("inputUrl")
+                    all_comments.append(sub)
+        
+        logger.info(f"🎭 Public scraper: {len(raw_comments)} top-level + {len(all_comments) - len(raw_comments)} sub = {len(all_comments)} total")
+        return all_comments
     
     # ========== Facebook Messenger ==========
     
@@ -455,36 +587,42 @@ class ApifyService:
         comment_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        שליחת תגובה לתגובה בפוסט פייסבוק
-        
-        Args:
-            post_url: URL הפוסט
-            reply_message: תוכן התגובה
-            comment_id: מזהה התגובה להגיב עליה (אופציונלי)
-            
-        Returns:
-            dict עם תוצאת הפעולה או None בשגיאה
+        שליחת תגובה לתגובה בפוסט פייסבוק באמצעות Apify actor עם Playwright.
         """
+        # רענון cookies מ-DB
+        self._load_cookies_from_db()
+        
         if not self.has_facebook_cookie:
             logger.error("🎭 ❌ Facebook cookie not configured for comment reply")
-            return None
+            return {"success": False, "error": "Facebook cookie לא מוגדר"}
         
-        # בדיקה שה-Actor מוגדר
-        comment_reply_actor = settings.apify_fb_comment_reply_actor
+        # טעינה מחדש של settings כדי לקבל ערכים עדכניים
+        current_settings = reload_settings()
+        comment_reply_actor = current_settings.apify_fb_comment_reply_actor
+        
         if not comment_reply_actor:
-            logger.warning("🎭 ⚠️ Comment reply actor not configured - skipping")
-            return None
+            logger.warning("🎭 ⚠️ APIFY_FB_COMMENT_REPLY_ACTOR not configured")
+            return {
+                "success": False,
+                "error": "Actor לתגובות לא מוגדר. יש להגדיר APIFY_FB_COMMENT_REPLY_ACTOR.",
+                "manual_required": True
+            }
+        
+        logger.info(f"🎭 Using comment reply actor: {comment_reply_actor}")
         
         input_data = {
             "postUrl": post_url,
             "replyMessage": reply_message,
-            "cookies": self._parse_cookie()
+            "cookies": self._parse_cookie(),
+            "proxyConfiguration": {
+                "useApifyProxy": True,
+                "apifyProxyGroups": ["RESIDENTIAL"],
+                "apifyProxyCountry": "IL"
+            }
         }
-        
         if comment_id:
             input_data["commentId"] = comment_id
         
-        # הרצת ה-Actor והמתנה לסיום
         run_info = await self.run_actor(
             actor_id=comment_reply_actor,
             input_data=input_data,
@@ -493,25 +631,32 @@ class ApifyService:
         )
         
         if not run_info:
-            return None
+            logger.error("🎭 ❌ Failed to start comment reply actor")
+            return {"success": False, "error": "Failed to start Apify actor run"}
         
         run_id = run_info.get("id")
-        if not run_id:
-            return None
+        run_status = run_info.get("status", "UNKNOWN")
         
-        # קבלת התוצאות
-        results = await self.get_run_dataset(run_id)
+        if run_status in ["FAILED", "ABORTED", "TIMED-OUT"]:
+            logger.error(f"🎭 ❌ Comment reply actor run {run_status}: {run_id}")
+            return {"success": False, "error": f"Actor run {run_status}"}
         
-        if results and len(results) > 0:
-            result = results[0]
-            if result.get("success"):
-                logger.info(f"🎭 ✅ Comment reply sent successfully")
-                return result
+        if run_id:
+            results = await self.get_run_dataset(run_id)
+            if results and len(results) > 0:
+                result = results[0]
+                if result.get("success"):
+                    logger.info(f"🎭 ✅ Comment reply sent via Apify actor (run: {run_id})")
+                    return result
+                else:
+                    error_msg = result.get("error", "Unknown error from actor")
+                    logger.error(f"🎭 ❌ Apify actor failed: {error_msg}")
+                    return result
             else:
-                logger.error(f"🎭 ❌ Comment reply failed: {result.get('error')}")
-                return result
+                logger.warning(f"🎭 ⚠️ No dataset results from run {run_id} - actor may have crashed")
+                return {"success": False, "error": "Actor did not return results - check Apify console"}
         
-        return None
+        return {"success": False, "error": "No run ID returned"}
     
     # ========== Utility Methods ==========
     
@@ -557,3 +702,5 @@ def get_apify_service() -> ApifyService:
     if _apify_service is None:
         _apify_service = ApifyService()
     return _apify_service
+
+

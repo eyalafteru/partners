@@ -20,7 +20,7 @@ from app.services.apify_service import get_apify_service
 
 
 # הגדרות
-COMMENT_SYNC_INTERVAL = 300  # 5 דקות
+COMMENT_SYNC_INTERVAL = 5 * 3600  # 5 שעות (חוסך עלויות Apify)
 RESPONSE_GENERATION_INTERVAL = 60  # דקה
 PUBLISH_CHECK_INTERVAL = 120  # 2 דקות
 FIRST_COMMENT_INTERVAL = 120  # 2 דקות - בדיקת תגובות ראשונות
@@ -73,33 +73,37 @@ async def sync_all_post_comments():
 
 async def generate_pending_responses():
     """
-    יצירת תשובות AI לתגובות חדשות
+    יצירת תשובות AI לתגובות שנשארו בסטטוס "new" (fallback).
+    בד"כ ה-sync כבר מייצר הצעות, אבל אם נכשל - ה-task הזה מנסה שוב.
     """
     try:
         async with get_async_session_context() as session:
-            # מציאת תגובות שצריכות תשובה
+            # מציאת תגובות שעדיין בסטטוס "new" (לא קיבלו הצעת AI)
             result = await session.execute(
                 select(FacebookReply).where(
                     FacebookReply.status == "new"
-                ).limit(10)  # מקסימום 10 בכל פעם
+                ).limit(10)
             )
             replies = result.scalars().all()
             
             if not replies:
                 return
             
-            logger.info(f"🤖 Generating responses for {len(replies)} replies...")
+            logger.info(f"🤖 Generating responses for {len(replies)} replies (fallback)...")
             
             service = get_facebook_marketing_service(session)
+            generated = 0
             
             for reply in replies:
                 try:
                     await service.generate_reply_response(reply.id)
+                    generated += 1
                 except Exception as e:
                     logger.error(f"Error generating response for reply {reply.id}: {e}")
             
             await session.commit()
-            logger.info(f"🤖 ✅ Generated responses")
+            if generated > 0:
+                logger.info(f"🤖 ✅ Generated {generated} fallback responses")
             
     except Exception as e:
         logger.error(f"🤖 ❌ Response generation error: {e}")

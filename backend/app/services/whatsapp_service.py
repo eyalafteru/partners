@@ -21,11 +21,14 @@ class WhatsAppService:
         """בדיקה אם השירות מוגדר"""
         return bool(self.api_url and self.instance_id and self.api_token)
     
-    async def send_to_phone(self, phone: str, message: str) -> bool:
-        """שליחת הודעת WhatsApp למספר ספציפי"""
+    async def send_to_phone(self, phone: str, message: str) -> dict:
+        """
+        שליחת הודעת WhatsApp למספר ספציפי.
+        מחזיר dict: {"success": bool, "message_id": str|None, "error": str|None}
+        """
         if not self.is_configured:
             logger.warning("📱 WhatsApp not configured - skipping notification")
-            return False
+            return {"success": False, "message_id": None, "error": "WhatsApp not configured"}
         
         try:
             url = f"{self.api_url}/waInstance{self.instance_id}/sendMessage/{self.api_token}"
@@ -46,15 +49,18 @@ class WhatsAppService:
                 response = await client.post(url, json=payload)
                 
                 if response.status_code == 200:
+                    data = response.json()
+                    message_id = data.get("idMessage")
                     logger.info(f"📱 ✅ WhatsApp sent to {phone}")
-                    return True
+                    return {"success": True, "message_id": message_id, "error": None}
                 else:
-                    logger.error(f"📱 ❌ WhatsApp failed for {phone}: {response.status_code}")
-                    return False
+                    error_msg = f"HTTP {response.status_code}"
+                    logger.error(f"📱 ❌ WhatsApp failed for {phone}: {error_msg}")
+                    return {"success": False, "message_id": None, "error": error_msg}
         
         except Exception as e:
             logger.error(f"📱 ❌ WhatsApp error for {phone}: {e}")
-            return False
+            return {"success": False, "message_id": None, "error": str(e)}
     
     async def send_to_all_active(self, message: str, email_id: int = None) -> List[dict]:
         """שליחת הודעה לכל המספרים הפעילים"""
@@ -78,12 +84,13 @@ class WhatsAppService:
                 logger.info(f"📱 Sending WhatsApp to {len(phones)} phones...")
                 
                 for phone_obj in phones:
-                    success = await self.send_to_phone(phone_obj.phone, message)
+                    send_result = await self.send_to_phone(phone_obj.phone, message)
+                    success = send_result.get("success", False)
                     
                     # שמירת לוג
                     log = NotificationLog(
                         phone=phone_obj.phone,
-                        message=message[:500],  # Truncate for storage
+                        message=message[:500],
                         status="sent" if success else "failed",
                         related_email_id=email_id
                     )
@@ -122,23 +129,30 @@ http://partners.ppcmedia.co.il/leads"""
         commenter_name: str,
         comment_text: str,
         suggested_response: str = None,
-        post_id: int = None
+        post_id: int = None,
+        interest_level: str = None
     ):
         """שליחת התראה על תגובה חדשה בפייסבוק"""
-        # קיצור הטקסטים אם צריך
         comment_preview = comment_text[:150] + "..." if len(comment_text) > 150 else comment_text
         
-        message = f"""📱 *תגובה חדשה בפייסבוק!*
+        # אינדיקטור interest level
+        interest_indicator = ""
+        if interest_level == "high":
+            interest_indicator = " 🔥 *עניין גבוה!*"
+        elif interest_level == "medium":
+            interest_indicator = " ⭐ עניין בינוני"
+        
+        message = f"""📱 *תגובה חדשה בפייסבוק!*{interest_indicator}
 
 📁 *קבוצה:* {group_name}
 👤 *מגיב:* {commenter_name}
 💬 *תגובה:* {comment_preview}"""
         
         if suggested_response:
-            response_preview = suggested_response[:150] + "..." if len(suggested_response) > 150 else suggested_response
+            response_preview = suggested_response[:200] + "..." if len(suggested_response) > 200 else suggested_response
             message += f"""
 
-🤖 *הצעת תשובה:*
+🤖 *הצעת תשובה (ממתינה לאישור):*
 {response_preview}"""
         
         message += """
