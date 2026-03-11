@@ -87,6 +87,7 @@ interface Post {
   first_comment_content: string | null;
   first_comment_posted: boolean;
   auto_replies_sent: number;
+  fb_post_url: string | null;
   // Debug field
   debug_ai_prompt: string | null;
 }
