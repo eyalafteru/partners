@@ -898,7 +898,7 @@ const FeedTab: React.FC<{
                                               </button>
                                               {posts.find(p => p.id === reply.post_id)?.fb_post_url && (
                                                 <a
-                                                  href={posts.find(p => p.id === reply.post_id)?.fb_post_url}
+                                                  href={posts.find(p => p.id === reply.post_id)?.fb_post_url ?? undefined}
                                                   target="_blank"
                                                   rel="noopener noreferrer"
                                                   className="px-3 py-1 bg-blue-600 text-white text-xs rounded font-medium inline-block"
