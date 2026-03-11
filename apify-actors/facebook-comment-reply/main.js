@@ -145,6 +145,16 @@ async function setupBrowser(cookies, proxyConfigInput) {
 
     // Cookie injection
     log.info(`🍪 Setting ${cookies.length} cookies...`);
+    const sameSiteMap = {
+        'no_restriction': 'None',
+        'unspecified': 'None',
+        'lax': 'Lax',
+        'strict': 'Strict',
+        'none': 'None',
+        'Lax': 'Lax',
+        'Strict': 'Strict',
+        'None': 'None',
+    };
     const cookiesToSet = cookies.map(c => {
         const cookie = {
             name: c.name,
@@ -154,11 +164,15 @@ async function setupBrowser(cookies, proxyConfigInput) {
             httpOnly: c.httpOnly !== undefined ? c.httpOnly : false,
             secure: c.secure !== undefined ? c.secure : true,
         };
-        if (c.sameSite) {
-            cookie.sameSite = c.sameSite;
+        // Normalize sameSite (Firefox exports "no_restriction", Playwright needs "None")
+        const rawSameSite = c.sameSite || c.same_site;
+        if (rawSameSite) {
+            cookie.sameSite = sameSiteMap[rawSameSite] || 'None';
         }
-        if (c.expires && c.expires > 0) {
-            cookie.expires = Math.floor(c.expires);
+        // Firefox Cookie-Editor uses "expirationDate", Playwright uses "expires"
+        const expiry = c.expires || c.expirationDate;
+        if (expiry && expiry > 0) {
+            cookie.expires = Math.floor(expiry);
         }
         return cookie;
     });
