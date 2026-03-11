@@ -1056,10 +1056,8 @@ async def send_reply_response(
     await session.commit()
     reply_data = ReplyResponse.model_validate(reply).model_dump(mode="json")
     if send_error:
-        return JSONResponse(
-            content=reply_data,
-            headers={"X-Send-Error": send_error[:500]},
-        )
+        reply_data["send_error"] = send_error[:500]
+        return JSONResponse(content=reply_data, status_code=200)
     return reply_data
 
 
