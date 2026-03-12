@@ -13,7 +13,7 @@ from sqlalchemy import text
 
 
 revision = '010'
-down_revision = '007'
+down_revision = '009'
 branch_labels = None
 depends_on = None
 
