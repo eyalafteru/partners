@@ -25,6 +25,11 @@ from app.services.facebook_reply_service import get_facebook_reply_service
 from app.services.whatsapp_service import get_whatsapp_service
 from app.services.local_browser_service import get_local_browser_service
 from app.services.anti_spam_service import AntiSpamService
+from app.services.facebook_action_logger import (
+    fb_action_log,
+    ACTION_POST, ACTION_REPLY, ACTION_SCRAPE_COMMENTS,
+    METHOD_APIFY_POSTER, METHOD_APIFY_CUSTOM, METHOD_LOCAL_BROWSER,
+)
 
 
 class FacebookMarketingService:
@@ -1041,21 +1046,29 @@ class FacebookMarketingService:
                 # ניסיון ראשון: דפדפן מקומי (Playwright)
                 logger.info(f"💬 🖥️ Trying local browser for reply {reply_id}...")
                 local_browser = get_local_browser_service()
+                lb_tracker = fb_action_log(
+                    ACTION_REPLY, METHOD_LOCAL_BROWSER,
+                    target_url=post.fb_post_url,
+                    post_id=reply.post_id,
+                    reply_id=reply_id,
+                )
                 result = await local_browser.reply_to_comment(
                     post_url=post.fb_post_url,
                     reply_message=final_response,
                     comment_id=reply.fb_comment_id
                 )
-                
+
                 if result and result.get("success"):
                     send_success = True
+                    await lb_tracker.finish(success=True)
                     logger.info(f"💬 ✅ Reply {reply_id} sent via local browser")
                 else:
                     local_error = result.get("error", "Unknown error") if result else "No result"
+                    await lb_tracker.finish(success=False, error_message=local_error)
                     logger.warning(f"💬 ⚠️ Local browser failed: {local_error}")
                     logger.error(f"💬 ❌ דפדפן מקומי נכשל (לכן חלון לא נפתח). סיבה: {local_error}")
-                    
-                    # Fallback: Apify actor (backup)
+
+                    # Fallback: Apify actor (backup) -- apify.reply_to_comment has its own logging
                     logger.info(f"💬 🔄 Falling back to Apify actor for reply {reply_id}...")
                     result = await self.apify.reply_to_comment(
                         post_url=post.fb_post_url,

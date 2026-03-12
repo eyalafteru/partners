@@ -356,3 +356,29 @@ class FacebookMessage(Base):
     
     def __repr__(self):
         return f"<FacebookMessage(id={self.id}, direction='{self.direction}', channel='{self.channel}')>"
+
+
+class FacebookActionLog(Base):
+    """לוג של כל פעולה שנוגעת בפייסבוק -- לזיהוי חסימות ואכיפת מכסות"""
+    __tablename__ = "facebook_action_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    action_type = Column(String(30), nullable=False, index=True)
+    method = Column(String(40), nullable=False)
+    profile_name = Column(String(100), index=True)
+    profile_id = Column(Integer)
+    target_url = Column(String(500))
+    post_id = Column(Integer)
+    reply_id = Column(Integer)
+    group_name = Column(String(255))
+    apify_run_id = Column(String(50))
+
+    success = Column(Boolean, default=False)
+    error_message = Column(Text)
+    duration_ms = Column(Integer)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    def __repr__(self):
+        return f"<FacebookActionLog(id={self.id}, action='{self.action_type}', method='{self.method}', success={self.success})>"

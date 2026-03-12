@@ -19,7 +19,8 @@ from app.models.facebook_marketing import (
     FacebookReply,
     FacebookConversation,
     FacebookMessage,
-    FacebookPostTemplate
+    FacebookPostTemplate,
+    FacebookActionLog,
 )
 from app.services.facebook_marketing_service import get_facebook_marketing_service
 from app.services.apify_service import get_apify_service
@@ -1463,3 +1464,91 @@ async def open_facebook_login():
     except Exception as e:
         logger.error(f"🍪 ❌ Failed to open browser: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to open browser: {str(e)}")
+
+
+# ========== Action Log ==========
+
+@router.get("/action-log", tags=["Action Log"])
+async def get_action_log(
+    limit: int = Query(50, ge=1, le=500),
+    action_type: Optional[str] = Query(None),
+    profile_name: Optional[str] = Query(None),
+    success: Optional[bool] = Query(None),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """
+    לוג פעולות פייסבוק -- לזיהוי חסימות ומעקב אחרי כל אינטראקציה.
+    """
+    query = select(FacebookActionLog).order_by(FacebookActionLog.created_at.desc())
+
+    if action_type:
+        query = query.where(FacebookActionLog.action_type == action_type)
+    if profile_name:
+        query = query.where(FacebookActionLog.profile_name == profile_name)
+    if success is not None:
+        query = query.where(FacebookActionLog.success == success)
+
+    query = query.limit(limit)
+    result = await session.execute(query)
+    rows = result.scalars().all()
+
+    return [
+        {
+            "id": r.id,
+            "action_type": r.action_type,
+            "method": r.method,
+            "profile_name": r.profile_name,
+            "target_url": r.target_url,
+            "post_id": r.post_id,
+            "reply_id": r.reply_id,
+            "group_name": r.group_name,
+            "apify_run_id": r.apify_run_id,
+            "success": r.success,
+            "error_message": r.error_message,
+            "duration_ms": r.duration_ms,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/action-log/summary", tags=["Action Log"])
+async def get_action_log_summary(
+    hours: int = Query(24, ge=1, le=720),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """
+    סיכום פעולות פייסבוק לפי סוג -- כמה הצליחו, כמה נכשלו.
+    """
+    from datetime import timedelta
+    from sqlalchemy import text
+    since = datetime.utcnow() - timedelta(hours=hours)
+    raw = await session.execute(text("""
+        SELECT action_type, method, profile_name,
+               COUNT(*) as total,
+               SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success_count,
+               SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as fail_count,
+               ROUND(AVG(duration_ms)) as avg_duration_ms
+        FROM facebook_action_log
+        WHERE created_at >= :since
+        GROUP BY action_type, method, profile_name
+        ORDER BY total DESC
+    """), {"since": since})
+
+    rows = raw.fetchall()
+    return {
+        "hours": hours,
+        "since": since.isoformat(),
+        "groups": [
+            {
+                "action_type": r[0],
+                "method": r[1],
+                "profile_name": r[2],
+                "total": r[3],
+                "success_count": r[4] or 0,
+                "fail_count": r[5] or 0,
+                "avg_duration_ms": r[6],
+            }
+            for r in rows
+        ],
+    }

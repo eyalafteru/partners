@@ -10,6 +10,11 @@ from loguru import logger
 
 from app.config import settings, reload_settings
 from app.services.facebook_cookie_resolver import get_facebook_cookies_for_publishing
+from app.services.facebook_action_logger import (
+    fb_action_log,
+    ACTION_POST, ACTION_REPLY, ACTION_SCRAPE_COMMENTS, ACTION_FIRST_COMMENT,
+    METHOD_APIFY_CUSTOM, METHOD_APIFY_PUBLIC, METHOD_APIFY_POSTER, METHOD_APIFY_LEGACY,
+)
 
 
 class ApifyService:
@@ -28,6 +33,7 @@ class ApifyService:
         
         # Facebook cookies - try DB first, fallback to .env
         self.facebook_cookie = settings.facebook_cookie
+        self._active_profile_name: Optional[str] = None
         self._load_cookies_from_db()
     
     def _load_cookies_from_db(self):
@@ -35,6 +41,7 @@ class ApifyService:
         cookie_str, profile_name = get_facebook_cookies_for_publishing()
         if cookie_str:
             self.facebook_cookie = cookie_str
+            self._active_profile_name = profile_name
             src = f"profile '{profile_name}'" if profile_name else "DB/env"
             logger.info(f"🍪 Cookies loaded from {src}")
             return True
@@ -270,6 +277,12 @@ class ApifyService:
         # ==== Custom Actor (preferred) ====
         if self.use_custom_actor:
             logger.info(f"🎭 Using CUSTOM actor: {self.fb_poster_custom_actor}")
+            method = METHOD_APIFY_POSTER
+            tracker = fb_action_log(
+                ACTION_POST, method,
+                profile_name=self._active_profile_name,
+                target_url=group_urls[0] if group_urls else None,
+            )
             input_data = {
                 "facebookCookies": cookie_array,
                 "groupUrls": group_urls,
@@ -279,14 +292,26 @@ class ApifyService:
                 "maxPostsPerRun": len(group_urls),
             }
             
-            return await self.run_actor(
+            result = await self.run_actor(
                 actor_id=self.fb_poster_custom_actor,
                 input_data=input_data,
                 wait_for_finish=False
             )
+            await tracker.finish(
+                success=result is not None,
+                apify_run_id=result.get("id") if result else None,
+                error_message=None if result else "run_actor returned None",
+            )
+            return result
         
         # ==== Legacy Actor (bhansalisoft) ====
         logger.info(f"🎭 Using LEGACY actor: {self.fb_poster_actor}")
+        method = METHOD_APIFY_LEGACY
+        tracker = fb_action_log(
+            ACTION_POST, method,
+            profile_name=self._active_profile_name,
+            target_url=group_urls[0] if group_urls else None,
+        )
         input_data = {
             "Facebook_Profile_URL": group_urls,
             "Message": messages,
@@ -294,7 +319,6 @@ class ApifyService:
             "Cookies": cookie_array
         }
         
-        # הוספת פרוקסי ישראלי Residential למניעת חסימות
         if use_proxy:
             input_data["proxyConfiguration"] = {
                 "useApifyProxy": True,
@@ -305,11 +329,17 @@ class ApifyService:
         
         logger.info(f"🎭 Actor input: {len(group_urls)} groups, {len(messages)} messages, delay={delay_seconds}s")
         
-        return await self.run_actor(
+        result = await self.run_actor(
             actor_id=self.fb_poster_actor,
             input_data=input_data,
             wait_for_finish=False
         )
+        await tracker.finish(
+            success=result is not None,
+            apify_run_id=result.get("id") if result else None,
+            error_message=None if result else "run_actor returned None",
+        )
+        return result
     
     async def post_single(
         self,
@@ -374,15 +404,22 @@ class ApifyService:
         """
         # ===== ניסיון 1: סורק ציבורי (בלי cookies, בלי סיכון) =====
         logger.info(f"🎭 get_post_comments: trying public scraper first (no cookies)")
+        tracker = fb_action_log(
+            ACTION_SCRAPE_COMMENTS, METHOD_APIFY_PUBLIC,
+            target_url=post_url,
+        )
         try:
             comments = await self._scrape_with_public_actor(post_url, max_comments)
             if comments and len(comments) > 0:
                 logger.info(f"🎭 ✅ Public scraper found {len(comments)} comments")
+                await tracker.finish(success=True)
                 return comments
             else:
                 logger.warning("🎭 ⚠️ Public scraper returned no comments")
+                await tracker.finish(success=False, error_message="No comments returned")
         except Exception as e:
             logger.warning(f"🎭 ⚠️ Public scraper failed: {e}")
+            await tracker.finish(success=False, error_message=str(e))
         
         # ===== ניסיון 2: Custom actor עם cookies (רק כ-fallback לקבוצות סגורות) =====
         self._load_cookies_from_db()
@@ -391,13 +428,22 @@ class ApifyService:
         
         if custom_actor and self.has_facebook_cookie:
             logger.info(f"🎭 Public scraper failed, falling back to custom actor with cookies: {custom_actor}")
+            tracker2 = fb_action_log(
+                ACTION_SCRAPE_COMMENTS, METHOD_APIFY_CUSTOM,
+                profile_name=self._active_profile_name,
+                target_url=post_url,
+            )
             try:
                 comments = await self._scrape_with_custom_actor(custom_actor, post_url)
                 if comments and len(comments) > 0:
                     logger.info(f"🎭 ✅ Custom scraper found {len(comments)} comments")
+                    await tracker2.finish(success=True)
                     return comments
+                else:
+                    await tracker2.finish(success=False, error_message="No comments returned")
             except Exception as e:
                 logger.warning(f"🎭 ⚠️ Custom scraper also failed: {e}")
+                await tracker2.finish(success=False, error_message=str(e))
         
         logger.warning(f"🎭 ❌ No comments found for {post_url}")
         return None
@@ -595,19 +641,25 @@ class ApifyService:
         """
         שליחת תגובה לתגובה בפוסט פייסבוק באמצעות Apify actor עם Playwright.
         """
-        # רענון cookies מ-DB
         self._load_cookies_from_db()
+        
+        tracker = fb_action_log(
+            ACTION_REPLY, METHOD_APIFY_CUSTOM,
+            profile_name=self._active_profile_name,
+            target_url=post_url,
+        )
         
         if not self.has_facebook_cookie:
             logger.error("🎭 ❌ Facebook cookie not configured for comment reply")
+            await tracker.finish(success=False, error_message="Cookie not configured")
             return {"success": False, "error": "Facebook cookie לא מוגדר"}
         
-        # טעינה מחדש של settings כדי לקבל ערכים עדכניים
         current_settings = reload_settings()
         comment_reply_actor = current_settings.apify_fb_comment_reply_actor
         
         if not comment_reply_actor:
             logger.warning("🎭 ⚠️ APIFY_FB_COMMENT_REPLY_ACTOR not configured")
+            await tracker.finish(success=False, error_message="Actor not configured")
             return {
                 "success": False,
                 "error": "Actor לתגובות לא מוגדר. יש להגדיר APIFY_FB_COMMENT_REPLY_ACTOR.",
@@ -638,6 +690,7 @@ class ApifyService:
         
         if not run_info:
             logger.error("🎭 ❌ Failed to start comment reply actor")
+            await tracker.finish(success=False, error_message="Failed to start Apify actor run")
             return {"success": False, "error": "Failed to start Apify actor run"}
         
         run_id = run_info.get("id")
@@ -645,6 +698,7 @@ class ApifyService:
         
         if run_status in ["FAILED", "ABORTED", "TIMED-OUT"]:
             logger.error(f"🎭 ❌ Comment reply actor run {run_status}: {run_id}")
+            await tracker.finish(success=False, apify_run_id=run_id, error_message=f"Actor run {run_status}")
             return {"success": False, "error": f"Actor run {run_status}"}
         
         if run_id:
@@ -653,15 +707,19 @@ class ApifyService:
                 result = results[0]
                 if result.get("success"):
                     logger.info(f"🎭 ✅ Comment reply sent via Apify actor (run: {run_id})")
+                    await tracker.finish(success=True, apify_run_id=run_id)
                     return result
                 else:
                     error_msg = result.get("error", "Unknown error from actor")
                     logger.error(f"🎭 ❌ Apify actor failed: {error_msg}")
+                    await tracker.finish(success=False, apify_run_id=run_id, error_message=error_msg)
                     return result
             else:
                 logger.warning(f"🎭 ⚠️ No dataset results from run {run_id} - actor may have crashed")
+                await tracker.finish(success=False, apify_run_id=run_id, error_message="No dataset results - actor may have crashed")
                 return {"success": False, "error": "Actor did not return results - check Apify console"}
         
+        await tracker.finish(success=False, error_message="No run ID returned")
         return {"success": False, "error": "No run ID returned"}
     
     # ========== Utility Methods ==========
