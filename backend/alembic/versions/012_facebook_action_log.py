@@ -1,15 +1,15 @@
 """facebook_action_log - לוג פעולות פייסבוק לזיהוי חסימות
 
-Revision ID: 010
-Revises: 009
+Revision ID: 012
+Revises: 011
 Create Date: 2026-03-11
 """
 from alembic import op
 import sqlalchemy as sa
 
 
-revision = '010'
-down_revision = '009'
+revision = '012'
+down_revision = '011'
 branch_labels = None
 depends_on = None
 
