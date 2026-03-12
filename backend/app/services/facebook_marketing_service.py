@@ -832,27 +832,27 @@ class FacebookMarketingService:
         
         await self.session.flush()
         
-        # שליחת התראות WhatsApp על תגובות חדשות
-        if new_replies:
-            group_result = await self.session.execute(
-                select(FacebookGroup).where(FacebookGroup.id == post.group_id)
-            )
-            group = group_result.scalar_one_or_none()
-            group_name = group.name if group else "קבוצה לא ידועה"
-            
-            for reply in new_replies:
-                try:
-                    interest = (reply.ai_analysis or {}).get("interest_level", "")
-                    await self.whatsapp.send_facebook_comment_alert(
-                        group_name=group_name,
-                        commenter_name=reply.fb_user_name or "משתמש",
-                        comment_text=reply.message or "",
-                        suggested_response=reply.suggested_response,
-                        post_id=post.id,
-                        interest_level=interest
-                    )
-                except Exception as e:
-                    logger.warning(f"💬 ⚠️ Failed to send WhatsApp alert: {e}")
+        # שליחת התראות WhatsApp על תגובות חדשות -- מושבת זמנית
+        # if new_replies:
+        #     group_result = await self.session.execute(
+        #         select(FacebookGroup).where(FacebookGroup.id == post.group_id)
+        #     )
+        #     group = group_result.scalar_one_or_none()
+        #     group_name = group.name if group else "קבוצה לא ידועה"
+        #     
+        #     for reply in new_replies:
+        #         try:
+        #             interest = (reply.ai_analysis or {}).get("interest_level", "")
+        #             await self.whatsapp.send_facebook_comment_alert(
+        #                 group_name=group_name,
+        #                 commenter_name=reply.fb_user_name or "משתמש",
+        #                 comment_text=reply.message or "",
+        #                 suggested_response=reply.suggested_response,
+        #                 post_id=post.id,
+        #                 interest_level=interest
+        #             )
+        #         except Exception as e:
+        #             logger.warning(f"💬 ⚠️ Failed to send WhatsApp alert: {e}")
         
         logger.info(f"💬 ✅ Synced {len(new_replies)} new replies for post {post_id}")
         return new_replies
