@@ -201,11 +201,30 @@
       🌐 פתח פייסבוק להתחברות
     </button>
 
-    <!-- Auto Sync Toggle -->
+    <!-- Reply Task Status -->
+    <div class="sync-info" id="replySection">
+      <div style="font-weight:600; margin-bottom:4px;">💬 תגובות אוטומטיות</div>
+      <div><span class="label">סטטוס:</span> <span id="taskStatus">-</span></div>
+      <div id="lastTaskRow" style="display:none"><span class="label">אחרון:</span> <span id="lastTaskInfo">-</span></div>
+    </div>
+
+    <button class="btn btn-secondary" id="pollNowBtn">
+      📋 בדוק משימות עכשיו
+    </button>
+
+    <!-- Toggles -->
     <div class="toggle-row">
       <span class="toggle-label">סנכרון אוטומטי</span>
       <label class="toggle">
         <input type="checkbox" id="autoSyncToggle" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <span class="toggle-label">תגובות אוטומטיות</span>
+      <label class="toggle">
+        <input type="checkbox" id="replyToggle" checked>
         <span class="toggle-slider"></span>
       </label>
     </div>

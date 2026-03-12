@@ -10,6 +10,11 @@ const cookieCount = document.getElementById("cookieCount");
 const syncBtn = document.getElementById("syncBtn");
 const openFbBtn = document.getElementById("openFbBtn");
 const autoSyncToggle = document.getElementById("autoSyncToggle");
+const replyToggle = document.getElementById("replyToggle");
+const pollNowBtn = document.getElementById("pollNowBtn");
+const taskStatusEl = document.getElementById("taskStatus");
+const lastTaskRow = document.getElementById("lastTaskRow");
+const lastTaskInfo = document.getElementById("lastTaskInfo");
 const backendUrlInput = document.getElementById("backendUrl");
 const messageEl = document.getElementById("message");
 
@@ -53,7 +58,31 @@ async function loadStatus() {
 
     // Settings
     autoSyncToggle.checked = status.autoSync;
+    replyToggle.checked = status.replyEnabled;
     backendUrlInput.value = status.backendUrl;
+
+    // Reply task status
+    if (status.currentTask) {
+      taskStatusEl.textContent = `⏳ עובד על reply #${status.currentTask.reply_id}`;
+      taskStatusEl.style.color = "#1877f2";
+    } else if (status.currentTaskStatus === "last_success") {
+      taskStatusEl.textContent = "✅ ממתין למשימה הבאה";
+      taskStatusEl.style.color = "#1e7e34";
+    } else if (status.currentTaskStatus === "last_failed") {
+      taskStatusEl.textContent = "⚠️ משימה אחרונה נכשלה";
+      taskStatusEl.style.color = "#c62828";
+    } else {
+      taskStatusEl.textContent = status.replyEnabled ? "🟢 פעיל" : "⏸️ מושבת";
+      taskStatusEl.style.color = "#65676b";
+    }
+
+    if (status.lastTaskResult) {
+      lastTaskRow.style.display = "block";
+      const t = new Date(status.lastTaskResult.time);
+      const timeStr = t.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+      const icon = status.lastTaskResult.success ? "✅" : "❌";
+      lastTaskInfo.textContent = `${icon} reply #${status.lastTaskResult.reply_id} ב-${timeStr}`;
+    }
 
     // Enable sync button
     syncBtn.disabled = false;
@@ -112,6 +141,33 @@ autoSyncToggle.addEventListener("change", async () => {
     action: "setAutoSync",
     enabled: autoSyncToggle.checked
   });
+});
+
+// ========== Reply Toggle ==========
+
+replyToggle.addEventListener("change", async () => {
+  await chrome.runtime.sendMessage({
+    action: "setReplyEnabled",
+    enabled: replyToggle.checked
+  });
+});
+
+// ========== Poll Now ==========
+
+pollNowBtn.addEventListener("click", async () => {
+  pollNowBtn.disabled = true;
+  pollNowBtn.textContent = "📋 בודק...";
+
+  try {
+    await chrome.runtime.sendMessage({ action: "pollNow" });
+    showMessage("success", "בדיקת משימות הושלמה");
+  } catch (err) {
+    showMessage("error", `שגיאה: ${err.message}`);
+  }
+
+  pollNowBtn.textContent = "📋 בדוק משימות עכשיו";
+  pollNowBtn.disabled = false;
+  await loadStatus();
 });
 
 // ========== Backend URL ==========

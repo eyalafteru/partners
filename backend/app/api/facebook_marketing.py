@@ -1552,3 +1552,131 @@ async def get_action_log_summary(
             for r in rows
         ],
     }
+
+
+# ========== Chrome Extension Tasks ==========
+
+@router.get("/extension/pending-tasks", tags=["Chrome Extension"])
+async def get_pending_extension_tasks(
+    session: AsyncSession = Depends(get_async_session),
+):
+    """
+    התוסף שואל: יש משימות תגובה ממתינות?
+    מחזיר את המשימה הכי ישנה שממתינה לתוסף (FIFO).
+    """
+    result = await session.execute(
+        select(FacebookReply)
+        .where(FacebookReply.status == "pending_extension")
+        .order_by(FacebookReply.created_at.asc())
+        .limit(1)
+    )
+    reply = result.scalar_one_or_none()
+
+    if not reply:
+        return {"has_task": False}
+
+    post_result = await session.execute(
+        select(FacebookPost).where(FacebookPost.id == reply.post_id)
+    )
+    post = post_result.scalar_one_or_none()
+
+    if not post or not post.fb_post_url:
+        logger.warning(f"🔌 Extension task skipped - no post URL for reply {reply.id}")
+        reply.status = "failed"
+        reply.actual_response = reply.suggested_response
+        await session.flush()
+        return {"has_task": False}
+
+    reply.status = "extension_working"
+    await session.flush()
+
+    logger.info(f"🔌 📤 Extension picked up task: reply {reply.id} for post {post.id}")
+
+    return {
+        "has_task": True,
+        "task": {
+            "reply_id": reply.id,
+            "post_id": post.id,
+            "post_url": post.fb_post_url,
+            "comment_id": reply.fb_comment_id,
+            "reply_message": reply.suggested_response or reply.actual_response,
+            "commenter_name": reply.fb_user_name,
+        },
+    }
+
+
+class ExtensionTaskResult(BaseModel):
+    reply_id: int
+    success: bool
+    error: Optional[str] = None
+    screenshot_url: Optional[str] = None
+
+
+@router.post("/extension/task-result", tags=["Chrome Extension"])
+async def report_extension_task_result(
+    body: ExtensionTaskResult,
+    session: AsyncSession = Depends(get_async_session),
+):
+    """
+    התוסף מדווח: משימה הצליחה / נכשלה.
+    """
+    from app.services.facebook_action_logger import (
+        fb_action_log, ACTION_REPLY, METHOD_CHROME_EXT,
+    )
+
+    result = await session.execute(
+        select(FacebookReply).where(FacebookReply.id == body.reply_id)
+    )
+    reply = result.scalar_one_or_none()
+
+    if not reply:
+        raise HTTPException(status_code=404, detail=f"Reply {body.reply_id} not found")
+
+    tracker = fb_action_log(
+        ACTION_REPLY, METHOD_CHROME_EXT,
+        target_url=None,
+        post_id=reply.post_id,
+        reply_id=reply.id,
+    )
+
+    if body.success:
+        reply.status = "responded"
+        reply.response_channel = "comment"
+        reply.actual_response = reply.suggested_response or reply.actual_response
+        reply.responded_at = datetime.utcnow()
+        await tracker.finish(success=True)
+        logger.info(f"🔌 ✅ Extension completed reply {reply.id}")
+    else:
+        reply.status = "extension_failed"
+        await tracker.finish(success=False, error_message=body.error)
+        logger.error(f"🔌 ❌ Extension failed reply {reply.id}: {body.error}")
+
+    await session.flush()
+
+    return {
+        "ok": True,
+        "reply_id": reply.id,
+        "new_status": reply.status,
+    }
+
+
+@router.get("/extension/log", tags=["Chrome Extension"])
+async def receive_extension_log(
+    level: str = Query("info"),
+    message: str = Query(...),
+    reply_id: Optional[int] = Query(None),
+):
+    """
+    התוסף שולח לוגים לבקנד לצורך debug.
+    """
+    log_fn = {
+        "debug": logger.debug,
+        "info": logger.info,
+        "warn": logger.warning,
+        "error": logger.error,
+    }.get(level, logger.info)
+
+    prefix = f"🔌 EXT [reply={reply_id}]" if reply_id else "🔌 EXT"
+    log_fn(f"{prefix} {message}")
+
+    return {"ok": True}

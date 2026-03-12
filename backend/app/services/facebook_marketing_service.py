@@ -1036,56 +1036,13 @@ class FacebookMarketingService:
             else:
                 send_error = "No profile URL for messenger"
         else:
-            # שליחת תגובה בפייסבוק - שימוש ב-Local Browser (אמין יותר מ-Apify)
-            post = await self.session.execute(
-                select(FacebookPost).where(FacebookPost.id == reply.post_id)
-            )
-            post = post.scalar_one_or_none()
-            
-            if post and post.fb_post_url:
-                # ניסיון ראשון: דפדפן מקומי (Playwright)
-                logger.info(f"💬 🖥️ Trying local browser for reply {reply_id}...")
-                local_browser = get_local_browser_service()
-                lb_tracker = fb_action_log(
-                    ACTION_REPLY, METHOD_LOCAL_BROWSER,
-                    target_url=post.fb_post_url,
-                    post_id=reply.post_id,
-                    reply_id=reply_id,
-                )
-                result = await local_browser.reply_to_comment(
-                    post_url=post.fb_post_url,
-                    reply_message=final_response,
-                    comment_id=reply.fb_comment_id
-                )
-
-                if result and result.get("success"):
-                    send_success = True
-                    await lb_tracker.finish(success=True)
-                    logger.info(f"💬 ✅ Reply {reply_id} sent via local browser")
-                else:
-                    local_error = result.get("error", "Unknown error") if result else "No result"
-                    await lb_tracker.finish(success=False, error_message=local_error)
-                    logger.warning(f"💬 ⚠️ Local browser failed: {local_error}")
-                    logger.error(f"💬 ❌ דפדפן מקומי נכשל (לכן חלון לא נפתח). סיבה: {local_error}")
-
-                    # Fallback: Apify actor (backup) -- apify.reply_to_comment has its own logging
-                    logger.info(f"💬 🔄 Falling back to Apify actor for reply {reply_id}...")
-                    result = await self.apify.reply_to_comment(
-                        post_url=post.fb_post_url,
-                        reply_message=final_response,
-                        comment_id=reply.fb_comment_id
-                    )
-                    if result and result.get("success"):
-                        send_success = True
-                        logger.info(f"💬 ✅ Reply {reply_id} sent via Apify (fallback)")
-                    elif result and result.get("manual_required"):
-                        send_error = result.get("error", "Manual posting required")
-                    else:
-                        send_error = result.get("error", "Comment reply failed") if result else "Comment reply returned None"
-                        logger.warning(f"💬 ⚠️ Both local browser and Apify failed for reply {reply_id}: {send_error}")
-            else:
-                send_error = "Post URL not found"
-                logger.warning(f"💬 ⚠️ Cannot reply to comment - post URL not found for reply {reply_id}")
+            # שליחת תגובה בפייסבוק -- העברה לתוסף Chrome (בטוח, דפדפן אמיתי)
+            reply.actual_response = final_response
+            reply.response_channel = "comment"
+            reply.status = "pending_extension"
+            await self.session.flush()
+            logger.info(f"💬 🔌 Reply {reply_id} queued for Chrome Extension")
+            send_success = True
         
         if not send_success:
             # שמירת התשובה כמאושרת - ממתינה לפרסום ידני

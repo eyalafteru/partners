@@ -1,17 +1,20 @@
 /**
- * PartnerCalc Cookie Sync - Background Service Worker
+ * PartnerCalc Cookie Sync + Reply Worker - Background Service Worker
  * 
- * Listens for Facebook cookie changes and auto-syncs to the backend.
- * Uses chrome.cookies.onChanged for reactive sync and chrome.alarms for periodic backup sync.
+ * 1) Cookie sync: reactive (onChanged) + periodic (alarm)
+ * 2) Reply tasks: polls backend for pending_extension tasks and dispatches
+ *    them to a Facebook tab running facebook_reply.js content script.
  */
 
 const DEFAULT_BACKEND_URL = "http://localhost:8000";
 const ESSENTIAL_COOKIES = ["c_user", "xs", "fr"];
 const DEBOUNCE_MS = 2000;
 const PERIODIC_SYNC_MINUTES = 30;
+const TASK_POLL_SECONDS = 45;
 
 let debounceTimer = null;
 let lastSentHash = "";
+let taskBusy = false;
 
 // ========== Cookie Extraction ==========
 
@@ -195,6 +198,7 @@ chrome.cookies.onChanged.addListener((changeInfo) => {
 // ========== Periodic Sync via Alarms ==========
 
 chrome.alarms.create("periodicSync", { periodInMinutes: PERIODIC_SYNC_MINUTES });
+chrome.alarms.create("taskPoll", { periodInMinutes: TASK_POLL_SECONDS / 60 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "periodicSync") {
@@ -204,7 +208,149 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     console.log("[PartnerCalc] Periodic sync triggered");
     await syncCookies();
   }
+
+  if (alarm.name === "taskPoll") {
+    const settings = await chrome.storage.local.get(["replyEnabled"]);
+    if (settings.replyEnabled === false) return;
+    await pollForTasks();
+  }
 });
+
+// ========== Reply Task Polling ==========
+
+async function sendBackendLog(level, message, replyId) {
+  try {
+    const backendUrl = await getBackendUrl();
+    const params = new URLSearchParams({ level, message });
+    if (replyId) params.set("reply_id", replyId);
+    await fetch(`${backendUrl}/api/facebook/extension/log?${params}`);
+  } catch (_) { /* best-effort */ }
+}
+
+async function pollForTasks() {
+  if (taskBusy) {
+    console.log("[PartnerCalc] Task poll skipped - already working on a task");
+    return;
+  }
+
+  const backendUrl = await getBackendUrl();
+  let taskData;
+
+  try {
+    const resp = await fetch(`${backendUrl}/api/facebook/extension/pending-tasks`);
+    if (!resp.ok) return;
+    taskData = await resp.json();
+  } catch (err) {
+    console.log("[PartnerCalc] Task poll failed:", err.message);
+    return;
+  }
+
+  if (!taskData.has_task) return;
+
+  const task = taskData.task;
+  console.log(`[PartnerCalc] 📋 Got task: reply_id=${task.reply_id} post=${task.post_url}`);
+  await sendBackendLog("info", `Picked up task reply_id=${task.reply_id}`, task.reply_id);
+
+  taskBusy = true;
+  await chrome.storage.local.set({
+    currentTask: task,
+    currentTaskStatus: "working",
+    currentTaskTime: new Date().toISOString(),
+  });
+
+  try {
+    const result = await executeTaskInTab(task);
+
+    // Report result to backend
+    await fetch(`${backendUrl}/api/facebook/extension/task-result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        reply_id: task.reply_id,
+        success: result.success,
+        error: result.error || null,
+      }),
+    });
+
+    const status = result.success ? "✅ success" : `❌ failed: ${result.error}`;
+    console.log(`[PartnerCalc] Task result: ${status}`);
+    await sendBackendLog(result.success ? "info" : "error", `Task result: ${status}`, task.reply_id);
+
+    await chrome.storage.local.set({
+      currentTask: null,
+      currentTaskStatus: result.success ? "last_success" : "last_failed",
+      lastTaskResult: { ...result, reply_id: task.reply_id, time: new Date().toISOString() },
+    });
+  } catch (err) {
+    console.error("[PartnerCalc] Task execution error:", err);
+    await sendBackendLog("error", `Task crashed: ${err.message}`, task.reply_id);
+
+    try {
+      await fetch(`${backendUrl}/api/facebook/extension/task-result`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reply_id: task.reply_id,
+          success: false,
+          error: `Extension error: ${err.message}`,
+        }),
+      });
+    } catch (_) { /* best-effort */ }
+
+    await chrome.storage.local.set({
+      currentTask: null,
+      currentTaskStatus: "last_failed",
+      lastTaskResult: { success: false, error: err.message, reply_id: task.reply_id, time: new Date().toISOString() },
+    });
+  } finally {
+    taskBusy = false;
+  }
+}
+
+async function executeTaskInTab(task) {
+  const postUrl = task.post_url;
+  await sendBackendLog("info", `Opening tab: ${postUrl}`, task.reply_id);
+
+  // Open Facebook post in a new tab
+  const tab = await chrome.tabs.create({ url: postUrl, active: false });
+
+  // Wait for tab to finish loading
+  await new Promise((resolve) => {
+    function onUpdate(tabId, info) {
+      if (tabId === tab.id && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(onUpdate);
+        resolve();
+      }
+    }
+    chrome.tabs.onUpdated.addListener(onUpdate);
+    // Safety timeout
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(onUpdate);
+      resolve();
+    }, 30000);
+  });
+
+  await sendBackendLog("info", "Tab loaded, sending executeReply message", task.reply_id);
+
+  // Send task to the content script
+  let result;
+  try {
+    result = await chrome.tabs.sendMessage(tab.id, {
+      action: "executeReply",
+      task,
+    });
+  } catch (err) {
+    await sendBackendLog("error", `sendMessage failed: ${err.message}`, task.reply_id);
+    result = { success: false, error: `Content script not responding: ${err.message}` };
+  }
+
+  // Close tab after a short delay (keep it briefly for debugging)
+  setTimeout(() => {
+    chrome.tabs.remove(tab.id).catch(() => {});
+  }, 5000);
+
+  return result || { success: false, error: "No response from content script" };
+}
 
 // ========== Message Handling (from popup AND content bridge) ==========
 
@@ -253,15 +399,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     extractFacebookCookies().then(async (result) => {
       const stored = await chrome.storage.local.get([
         "lastSyncTime", "lastSyncStatus", "lastSyncMessage",
-        "autoSync", "backendUrl", "isLoggedIn"
+        "autoSync", "backendUrl", "isLoggedIn",
+        "replyEnabled", "currentTask", "currentTaskStatus", "lastTaskResult",
       ]);
       sendResponse({
         ...result,
         lastSyncTime: stored.lastSyncTime || null,
         lastSyncStatus: stored.lastSyncStatus || "never",
         lastSyncMessage: stored.lastSyncMessage || "Never synced",
-        autoSync: stored.autoSync !== false, // default true
-        backendUrl: stored.backendUrl || DEFAULT_BACKEND_URL
+        autoSync: stored.autoSync !== false,
+        backendUrl: stored.backendUrl || DEFAULT_BACKEND_URL,
+        replyEnabled: stored.replyEnabled !== false,
+        currentTask: stored.currentTask || null,
+        currentTaskStatus: stored.currentTaskStatus || "idle",
+        lastTaskResult: stored.lastTaskResult || null,
       });
     });
     return true;
@@ -282,6 +433,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "openFacebook") {
     chrome.tabs.create({ url: "https://www.facebook.com/" });
     sendResponse({ ok: true });
+    return false;
+  }
+
+  if (message.action === "setReplyEnabled") {
+    chrome.storage.local.set({ replyEnabled: message.enabled });
+    console.log(`[PartnerCalc] Reply tasks ${message.enabled ? "enabled" : "disabled"}`);
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (message.action === "pollNow") {
+    pollForTasks().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  // Log forwarding from content script → backend
+  if (message.action === "extensionLog") {
+    sendBackendLog(message.level, message.message, message.replyId);
     return false;
   }
 });
