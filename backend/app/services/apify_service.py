@@ -366,35 +366,41 @@ class ApifyService:
     ) -> Optional[List[Dict[str, Any]]]:
         """
         קבלת תגובות מפוסט ספציפי.
-        מנסה קודם את ה-Actor המותאם שלנו (Playwright + cookies),
-        ואם לא מוגדר - נופל ל-Apify public scraper.
+        מנסה קודם סורק ציבורי (ללא cookies, ללא סיכון לחשבון),
+        ורק אם נכשל (למשל קבוצה סגורה) -- נופל ל-custom actor עם cookies.
         
         Returns:
             רשימת תגובות
         """
-        # רענון cookies מ-DB (וודא שיש את העדכניים ביותר)
-        self._load_cookies_from_db()
+        # ===== ניסיון 1: סורק ציבורי (בלי cookies, בלי סיכון) =====
+        logger.info(f"🎭 get_post_comments: trying public scraper first (no cookies)")
+        try:
+            comments = await self._scrape_with_public_actor(post_url, max_comments)
+            if comments and len(comments) > 0:
+                logger.info(f"🎭 ✅ Public scraper found {len(comments)} comments")
+                return comments
+            else:
+                logger.warning("🎭 ⚠️ Public scraper returned no comments")
+        except Exception as e:
+            logger.warning(f"🎭 ⚠️ Public scraper failed: {e}")
         
-        # ===== ניסיון 1: Custom Playwright actor (אמין יותר) =====
+        # ===== ניסיון 2: Custom actor עם cookies (רק כ-fallback לקבוצות סגורות) =====
+        self._load_cookies_from_db()
         current_settings = reload_settings()
         custom_actor = current_settings.apify_fb_comment_reply_actor
-        logger.info(f"🎭 get_post_comments v2: custom_actor={custom_actor!r}, has_cookie={self.has_facebook_cookie}")
         
         if custom_actor and self.has_facebook_cookie:
-            logger.info(f"🎭 Using custom Playwright scraper: {custom_actor}")
+            logger.info(f"🎭 Public scraper failed, falling back to custom actor with cookies: {custom_actor}")
             try:
                 comments = await self._scrape_with_custom_actor(custom_actor, post_url)
                 if comments and len(comments) > 0:
                     logger.info(f"🎭 ✅ Custom scraper found {len(comments)} comments")
                     return comments
-                else:
-                    logger.warning("🎭 ⚠️ Custom scraper returned no comments, falling back to public scraper")
             except Exception as e:
-                logger.warning(f"🎭 ⚠️ Custom scraper failed: {e}, falling back to public scraper")
+                logger.warning(f"🎭 ⚠️ Custom scraper also failed: {e}")
         
-        # ===== ניסיון 2: Apify public scraper (fallback) =====
-        logger.info("🎭 Using Apify public comments scraper (fallback)")
-        return await self._scrape_with_public_actor(post_url, max_comments)
+        logger.warning(f"🎭 ❌ No comments found for {post_url}")
+        return None
     
     async def _scrape_with_custom_actor(
         self,
