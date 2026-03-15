@@ -96,6 +96,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"📘 Facebook Marketing tasks failed to start: {e}")
     
+    # Start Lead Hunter Auto-Reply task
+    lead_hunter_task = None
+    try:
+        from app.tasks.lead_hunter_tasks import start_lead_hunter_reply_task
+        lead_hunter_task = asyncio.create_task(start_lead_hunter_reply_task())
+        logger.info("🎯 Lead Hunter Auto-Reply task started")
+    except Exception as e:
+        logger.warning(f"🎯 Lead Hunter Auto-Reply task failed to start: {e}")
+    
     yield
     
     # Shutdown
@@ -108,6 +117,8 @@ async def lifespan(app: FastAPI):
         email_scheduler_task.cancel()
     if facebook_task:
         facebook_task.cancel()
+    if lead_hunter_task:
+        lead_hunter_task.cancel()
     await close_db()
 
 

@@ -61,8 +61,10 @@ class LeadCategory(Base):
     # האם לשלוח התראה WhatsApp לקטגוריה זו
     is_alert_worthy = Column(Boolean, default=True)
 
-    # תשתית לתגובה אוטומטית עתידית
+    # תגובה אוטומטית דרך תוסף Chrome
     auto_reply_enabled = Column(Boolean, default=False)
+    auto_reply_daily_limit = Column(Integer, default=10)
+    auto_reply_delay_minutes = Column(Integer, default=10)
 
     is_active = Column(Boolean, default=True)
 
@@ -151,10 +153,11 @@ class LeadPost(Base):
     # אזור גיאוגרפי שזוהה על ידי AI
     area = Column(String(50), nullable=True)
 
-    # תשתית לתגובה אוטומטית עתידית
+    # תגובה אוטומטית דרך תוסף Chrome
     auto_reply_enabled = Column(Boolean, default=False)
     auto_reply_sent = Column(Boolean, default=False)
     auto_reply_sent_at = Column(DateTime(timezone=True))
+    auto_reply_status = Column(String(20), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

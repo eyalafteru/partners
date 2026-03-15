@@ -22,6 +22,7 @@ from app.models.facebook_marketing import (
     FacebookPostTemplate,
     FacebookActionLog,
 )
+from app.models.lead_hunter import LeadPost
 from app.services.facebook_marketing_service import get_facebook_marketing_service
 from app.services.apify_service import get_apify_service
 
@@ -1568,8 +1569,9 @@ async def get_pending_extension_tasks(
 ):
     """
     התוסף שואל: יש משימות תגובה ממתינות?
-    מחזיר את המשימה הכי ישנה שממתינה לתוסף (FIFO).
+    בודק קודם משימות Facebook Marketing, אח"כ Lead Hunter.
     """
+    # --- 1) Facebook Marketing tasks (existing) ---
     result = await session.execute(
         select(FacebookReply)
         .where(FacebookReply.status == "pending_extension")
@@ -1578,41 +1580,74 @@ async def get_pending_extension_tasks(
     )
     reply = result.scalar_one_or_none()
 
-    if not reply:
-        return {"has_task": False}
+    if reply:
+        post_result = await session.execute(
+            select(FacebookPost).where(FacebookPost.id == reply.post_id)
+        )
+        post = post_result.scalar_one_or_none()
 
-    post_result = await session.execute(
-        select(FacebookPost).where(FacebookPost.id == reply.post_id)
+        if not post or not post.fb_post_url:
+            logger.warning(f"🔌 Extension task skipped - no post URL for reply {reply.id}")
+            reply.status = "failed"
+            reply.actual_response = reply.suggested_response
+            await session.flush()
+        else:
+            reply.status = "extension_working"
+            await session.flush()
+
+            logger.info(f"🔌 📤 Extension picked up marketing task: reply {reply.id} for post {post.id}")
+
+            return {
+                "has_task": True,
+                "task": {
+                    "task_type": "marketing",
+                    "reply_id": reply.id,
+                    "post_id": post.id,
+                    "post_url": post.fb_post_url,
+                    "comment_id": reply.fb_comment_id,
+                    "reply_message": reply.suggested_response or reply.actual_response,
+                    "commenter_name": reply.fb_user_name,
+                },
+            }
+
+    # --- 2) Lead Hunter auto-reply tasks ---
+    lead_result = await session.execute(
+        select(LeadPost)
+        .where(LeadPost.auto_reply_status == "pending")
+        .order_by(LeadPost.created_at.asc())
+        .limit(1)
     )
-    post = post_result.scalar_one_or_none()
+    lead_post = lead_result.scalar_one_or_none()
 
-    if not post or not post.fb_post_url:
-        logger.warning(f"🔌 Extension task skipped - no post URL for reply {reply.id}")
-        reply.status = "failed"
-        reply.actual_response = reply.suggested_response
+    if lead_post:
+        if not lead_post.post_url or not lead_post.ai_reply:
+            logger.warning(f"🔌 Lead Hunter task skipped - no URL/reply for post {lead_post.id}")
+            lead_post.auto_reply_status = "failed"
+            await session.flush()
+            return {"has_task": False}
+
+        lead_post.auto_reply_status = "working"
         await session.flush()
-        return {"has_task": False}
 
-    reply.status = "extension_working"
-    await session.flush()
+        logger.info(f"🔌 📤 Extension picked up lead_hunter task: post {lead_post.id}")
 
-    logger.info(f"🔌 📤 Extension picked up task: reply {reply.id} for post {post.id}")
+        return {
+            "has_task": True,
+            "task": {
+                "task_type": "lead_hunter",
+                "lead_post_id": lead_post.id,
+                "post_url": lead_post.post_url,
+                "reply_message": lead_post.ai_reply,
+            },
+        }
 
-    return {
-        "has_task": True,
-        "task": {
-            "reply_id": reply.id,
-            "post_id": post.id,
-            "post_url": post.fb_post_url,
-            "comment_id": reply.fb_comment_id,
-            "reply_message": reply.suggested_response or reply.actual_response,
-            "commenter_name": reply.fb_user_name,
-        },
-    }
+    return {"has_task": False}
 
 
 class ExtensionTaskResult(BaseModel):
-    reply_id: int
+    task_type: str = "marketing"
+    reply_id: Optional[int] = None
+    lead_post_id: Optional[int] = None
     success: bool
     error: Optional[str] = None
     screenshot_url: Optional[str] = None
@@ -1625,10 +1660,17 @@ async def report_extension_task_result(
 ):
     """
     התוסף מדווח: משימה הצליחה / נכשלה.
+    תומך במשימות marketing (FacebookReply) ו-lead_hunter (LeadPost).
     """
     from app.services.facebook_action_logger import (
         fb_action_log, ACTION_REPLY, METHOD_CHROME_EXT,
     )
+
+    if body.task_type == "lead_hunter" and body.lead_post_id:
+        return await _handle_lead_hunter_result(body, session)
+
+    if not body.reply_id:
+        raise HTTPException(status_code=400, detail="reply_id is required for marketing tasks")
 
     result = await session.execute(
         select(FacebookReply).where(FacebookReply.id == body.reply_id)
@@ -1651,18 +1693,58 @@ async def report_extension_task_result(
         reply.actual_response = reply.suggested_response or reply.actual_response
         reply.responded_at = datetime.utcnow()
         await tracker.finish(success=True)
-        logger.info(f"🔌 ✅ Extension completed reply {reply.id}")
+        logger.info(f"🔌 ✅ Extension completed marketing reply {reply.id}")
     else:
         reply.status = "extension_failed"
         await tracker.finish(success=False, error_message=body.error)
-        logger.error(f"🔌 ❌ Extension failed reply {reply.id}: {body.error}")
+        logger.error(f"🔌 ❌ Extension failed marketing reply {reply.id}: {body.error}")
 
     await session.flush()
 
     return {
         "ok": True,
+        "task_type": "marketing",
         "reply_id": reply.id,
         "new_status": reply.status,
+    }
+
+
+async def _handle_lead_hunter_result(body: ExtensionTaskResult, session: AsyncSession):
+    from app.services.facebook_action_logger import (
+        fb_action_log, ACTION_REPLY,
+    )
+
+    result = await session.execute(
+        select(LeadPost).where(LeadPost.id == body.lead_post_id)
+    )
+    lead_post = result.scalar_one_or_none()
+
+    if not lead_post:
+        raise HTTPException(status_code=404, detail=f"LeadPost {body.lead_post_id} not found")
+
+    tracker = fb_action_log(
+        ACTION_REPLY, "chrome_ext_lead_hunter",
+        target_url=lead_post.post_url,
+    )
+
+    if body.success:
+        lead_post.auto_reply_sent = True
+        lead_post.auto_reply_sent_at = datetime.utcnow()
+        lead_post.auto_reply_status = "sent"
+        await tracker.finish(success=True)
+        logger.info(f"🔌 ✅ Extension completed lead_hunter reply for post {lead_post.id}")
+    else:
+        lead_post.auto_reply_status = "failed"
+        await tracker.finish(success=False, error_message=body.error)
+        logger.error(f"🔌 ❌ Extension failed lead_hunter reply for post {lead_post.id}: {body.error}")
+
+    await session.flush()
+
+    return {
+        "ok": True,
+        "task_type": "lead_hunter",
+        "lead_post_id": lead_post.id,
+        "new_status": lead_post.auto_reply_status,
     }
 
 

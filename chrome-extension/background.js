@@ -248,8 +248,10 @@ async function pollForTasks() {
   if (!taskData.has_task) return;
 
   const task = taskData.task;
-  console.log(`[PartnerCalc] 📋 Got task: reply_id=${task.reply_id} post=${task.post_url}`);
-  await sendBackendLog("info", `Picked up task reply_id=${task.reply_id}`, task.reply_id);
+  const taskType = task.task_type || "marketing";
+  const taskId = task.reply_id || task.lead_post_id;
+  console.log(`[PartnerCalc] 📋 Got ${taskType} task: id=${taskId} post=${task.post_url}`);
+  await sendBackendLog("info", `Picked up ${taskType} task id=${taskId}`, task.reply_id);
 
   taskBusy = true;
   await chrome.storage.local.set({
@@ -261,46 +263,53 @@ async function pollForTasks() {
   try {
     const result = await executeTaskInTab(task);
 
-    // Report result to backend
+    const resultBody = {
+      task_type: taskType,
+      success: result.success,
+      error: result.error || null,
+    };
+    if (task.reply_id) resultBody.reply_id = task.reply_id;
+    if (task.lead_post_id) resultBody.lead_post_id = task.lead_post_id;
+
     await fetch(`${backendUrl}/api/facebook/extension/task-result`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        reply_id: task.reply_id,
-        success: result.success,
-        error: result.error || null,
-      }),
+      body: JSON.stringify(resultBody),
     });
 
     const status = result.success ? "✅ success" : `❌ failed: ${result.error}`;
-    console.log(`[PartnerCalc] Task result: ${status}`);
+    console.log(`[PartnerCalc] Task result (${taskType}): ${status}`);
     await sendBackendLog(result.success ? "info" : "error", `Task result: ${status}`, task.reply_id);
 
     await chrome.storage.local.set({
       currentTask: null,
       currentTaskStatus: result.success ? "last_success" : "last_failed",
-      lastTaskResult: { ...result, reply_id: task.reply_id, time: new Date().toISOString() },
+      lastTaskResult: { ...result, task_type: taskType, reply_id: task.reply_id, lead_post_id: task.lead_post_id, time: new Date().toISOString() },
     });
   } catch (err) {
     console.error("[PartnerCalc] Task execution error:", err);
     await sendBackendLog("error", `Task crashed: ${err.message}`, task.reply_id);
 
     try {
+      const errorBody = {
+        task_type: taskType,
+        success: false,
+        error: `Extension error: ${err.message}`,
+      };
+      if (task.reply_id) errorBody.reply_id = task.reply_id;
+      if (task.lead_post_id) errorBody.lead_post_id = task.lead_post_id;
+
       await fetch(`${backendUrl}/api/facebook/extension/task-result`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          reply_id: task.reply_id,
-          success: false,
-          error: `Extension error: ${err.message}`,
-        }),
+        body: JSON.stringify(errorBody),
       });
     } catch (_) { /* best-effort */ }
 
     await chrome.storage.local.set({
       currentTask: null,
       currentTaskStatus: "last_failed",
-      lastTaskResult: { success: false, error: err.message, reply_id: task.reply_id, time: new Date().toISOString() },
+      lastTaskResult: { success: false, error: err.message, task_type: taskType, reply_id: task.reply_id, lead_post_id: task.lead_post_id, time: new Date().toISOString() },
     });
   } finally {
     taskBusy = false;

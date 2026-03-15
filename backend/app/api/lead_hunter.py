@@ -53,6 +53,9 @@ class CategoryUpdate(BaseModel):
     whatsapp_name: Optional[str] = None
     is_alert_worthy: Optional[bool] = None
     is_active: Optional[bool] = None
+    auto_reply_enabled: Optional[bool] = None
+    auto_reply_daily_limit: Optional[int] = None
+    auto_reply_delay_minutes: Optional[int] = None
 
 
 class PostStatusUpdate(BaseModel):
@@ -416,6 +419,8 @@ async def get_categories(session: AsyncSession = Depends(get_async_session)):
             "whatsapp_name": c.whatsapp_name,
             "is_alert_worthy": c.is_alert_worthy,
             "auto_reply_enabled": c.auto_reply_enabled,
+            "auto_reply_daily_limit": c.auto_reply_daily_limit,
+            "auto_reply_delay_minutes": c.auto_reply_delay_minutes,
             "is_active": c.is_active,
         }
         for c in categories
