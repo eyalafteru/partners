@@ -143,6 +143,8 @@ class PostResponse(BaseModel):
 
 class PostUpdate(BaseModel):
     content: Optional[str] = None
+    fb_post_url: Optional[str] = None
+    status: Optional[str] = None
 
 class CampaignUpdate(BaseModel):
     name: Optional[str] = None
@@ -670,6 +672,10 @@ async def update_post(
     
     if data.content:
         post.content = data.content
+    if data.fb_post_url:
+        post.fb_post_url = data.fb_post_url
+    if data.status:
+        post.status = data.status
     
     await session.commit()
     await session.refresh(post)
