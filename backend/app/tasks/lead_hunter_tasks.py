@@ -13,6 +13,7 @@ from app.models.lead_hunter import LeadPost, LeadCategory, LeadArea
 
 LEAD_REPLY_QUEUE_INTERVAL = 180  # 3 דקות
 MAX_PER_BATCH = 3
+MAX_POST_AGE_HOURS = 48
 
 
 async def queue_lead_hunter_replies():
@@ -43,6 +44,7 @@ async def queue_lead_hunter_replies():
                 delay_minutes = category.auto_reply_delay_minutes or 10
                 daily_limit = category.auto_reply_daily_limit or 10
                 cutoff = datetime.utcnow() - timedelta(minutes=delay_minutes)
+                max_age_cutoff = datetime.utcnow() - timedelta(hours=MAX_POST_AGE_HOURS)
 
                 today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
                 sent_today_result = await session.execute(
@@ -73,6 +75,7 @@ async def queue_lead_hunter_replies():
                             LeadPost.auto_reply_status.is_(None),
                             LeadPost.status.in_(["classified", "notified"]),
                             LeadPost.created_at <= cutoff,
+                            LeadPost.created_at >= max_age_cutoff,
                         )
                     ).order_by(LeadPost.created_at.asc()).limit(batch_limit)
                 )
