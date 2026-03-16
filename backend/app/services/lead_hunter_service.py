@@ -37,9 +37,16 @@ SYSTEM_PROMPT = """אתה מערכת סיווג לידים מפייסבוק. ת�
 
 חשוב: ספאמרים שמפרסמים את עצמם = קטגוריה 4 (מתחרה), לא קטגוריה 1."""
 
-REPLY_SYSTEM_PROMPT = """אתה כותב תגובות קצרות ומקצועיות לפוסטים בפייסבוק בעברית.
-כתוב תגובה אנושית, חמה ומזמינה - לא רובוטית.
-עד 3 משפטים. אל תציין מחירים ספציפיים. סיים בהזמנה ליצור קשר."""
+REPLY_SYSTEM_PROMPT = """אתה משה עובדיה, יועץ מעברים בכיר באתר "הובלות בישראל" - האתר הגדול ביותר בארץ להשוואת מחירי הובלה ע"י מובילים מקצועיים בכל הארץ.
+באתר יש גם מחשבון הובלה מתקדם שמאפשר לגולש לקבל אומדן למחיר ההובלה שלו.
+
+כללי כתיבה:
+- כתוב בעברית טבעית, אנושית וחמה - כמו בן אדם אמיתי שרוצה לעזור, לא כרובוט
+- כל תגובה חייבת להיות שונה מהקודמת - גוון ניסוחים, פתיחות וסגנון כדי שפייסבוק לא יזהה דפוס חוזר
+- עד 3-4 משפטים
+- אל תציין מחירים ספציפיים
+- טלפון מוקד ההובלות: 0537934107
+- אתר: https://www.hovalot.org.il/"""
 
 
 async def classify_post_with_ai(
@@ -119,18 +126,81 @@ async def _classify_with_openai(user_prompt: str) -> dict:
     return json.loads(response.choices[0].message.content)
 
 
+HOVALOT_REPLY_PROMPT = """נתח את הפוסט הבא וזהה את סוג הצורך, ואז כתוב תגובה מותאמת.
+
+פוסט מפייסבוק:
+מפרסם: {actor_name}
+תוכן: \"\"\"{description}\"\"\"
+
+זהה את סוג הצורך לפי הכללים הבאים:
+
+סוג א - צורך מיידי/דחוף:
+מילות מפתח: להיום, למחר, ימים הקרובים, דחוף, עכשיו, מיידי, בדחיפות
+הנחיות לתגובה:
+- פנה בשם (אם מזוהה) או "היי"
+- הבע הבנה לדחיפות (למשל: "מבין שזה דחוף", "ברור שצריך את זה מהר")
+- הפנה ישירות לטלפון המוקד 0537934107 לקבלת הצעות מחיר מיידיות מהמובילים שלנו
+- הוסף קישור לאתר https://www.hovalot.org.il/
+
+סוג ב - גישוש/תכנון לטווח ארוך:
+מילות מפתח: סוף החודש, כמה עולה, הצעת מחיר, אשמח להצעה, תאריך עתידי ספציפי
+הנחיות לתגובה:
+- הדגש את המחשבון המתקדם באתר שיכול לחסוך הרבה כסף
+- תן קישור לאתר https://www.hovalot.org.il/
+- ציין שבאתר יש גם טלפון מוקד לקבלת הצעות מחיר ממובילים מקצועיים ובדוקים
+- שלב את המסר: כשיש זמן להובלה שווה לבדוק כדי לחסוך ולבחור נכון
+
+סוג ג - צורך מקצועי/עבודה מורכבת:
+מילות מפתח: מקצועיים, רציניים, פירוק והרכבה, מורכב, התקנה, עבודה רצינית
+הנחיות לתגובה:
+- הדגש את החשיבות בבחירת מוביל מקצועי ובדוק
+- הפנה למחשבון באתר https://www.hovalot.org.il/
+- ציין שאפשר לדבר עם מוקדנית שלנו כדי להתאים את ההובלה המתאימה ביותר, טלפון 053-7934107
+- שלב את המסר: כשיש זמן להובלה שווה לבדוק כדי לחסוך ולבחור נכון
+
+כתוב תגובה אחת בלבד (3-4 משפטים) בעברית. החזר רק את טקסט התגובה, ללא הסברים ובלי לציין את סוג הצורך."""
+
+
+URGENCY_KEYWORDS = {
+    "urgent": ["להיום", "למחר", "דחוף", "עכשיו", "מיידי", "בדחיפות", "ימים הקרובים", "לעכשיו", "דחופה", "דחופ"],
+    "professional": ["מקצועיים", "רציניים", "פירוק והרכבה", "פירוק", "הרכבה", "התקנה", "מורכב", "עבודה רצינית", "מקצועי"],
+    "exploring": ["סוף החודש", "כמה עולה", "הצעת מחיר", "אשמח להצעה", "אשמח להצעת"],
+}
+
+
+def detect_urgency_type(description: str) -> str:
+    """מזהה את תת-סוג הדחיפות לפי מילות מפתח בפוסט."""
+    text = description.lower() if description else ""
+    for utype in ["urgent", "professional", "exploring"]:
+        for keyword in URGENCY_KEYWORDS[utype]:
+            if keyword in text:
+                return utype
+    return "general"
+
+
 async def generate_reply_with_ai(
     description: str,
     category: LeadCategory,
     actor_name: str,
-) -> str:
+) -> tuple[str, str]:
     """
     יוצר תגובה מותאמת אישית לפוסט לפי קטגוריה.
+    עבור קטגוריית "חיפוש הובלה" - משתמש בפרומפט מורחב עם זיהוי תת-סוגים.
+    מחזיר tuple של (תגובה, סוג_דחיפות).
     """
     if not category.reply_prompt:
-        return ""
+        return "", "general"
 
-    user_prompt = f"""פוסט מפייסבוק:
+    is_hovalot = "הובלה" in category.name
+    urgency_type = detect_urgency_type(description) if is_hovalot else "general"
+
+    if is_hovalot:
+        user_prompt = HOVALOT_REPLY_PROMPT.format(
+            actor_name=actor_name,
+            description=description[:1500],
+        )
+    else:
+        user_prompt = f"""פוסט מפייסבוק:
 מפרסם: {actor_name}
 תוכן: \"\"\"{description[:1500]}\"\"\"
 
@@ -138,32 +208,34 @@ async def generate_reply_with_ai(
 
 כתוב תגובה קצרה (עד 3 משפטים) בעברית:"""
 
+    max_tokens = 350 if is_hovalot else 200
+
     try:
         if settings.anthropic_api_key:
             import anthropic
             client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
             response = await client.messages.create(
                 model="claude-3-haiku-20240307",
-                max_tokens=200,
+                max_tokens=max_tokens,
                 system=REPLY_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_prompt}],
             )
-            return response.content[0].text.strip()
+            return response.content[0].text.strip(), urgency_type
         elif settings.openai_api_key:
             from openai import AsyncOpenAI
             client = AsyncOpenAI(api_key=settings.openai_api_key)
             response = await client.chat.completions.create(
                 model="gpt-4o-mini",
-                max_tokens=200,
+                max_tokens=max_tokens,
                 messages=[
                     {"role": "system", "content": REPLY_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
             )
-            return response.choices[0].message.content.strip()
+            return response.choices[0].message.content.strip(), urgency_type
     except Exception as e:
         logger.error(f"❌ Reply generation failed: {e}")
-    return ""
+    return "", urgency_type
 
 
 # ============================================================
@@ -362,6 +434,7 @@ async def classify_and_notify_background(
 
             # AI reply - מייצר אם הקטגוריה דורשת התראה או תגובה אוטומטית
             ai_reply = ""
+            urgency_type = "general"
             should_generate_reply = (
                 matched_category
                 and matched_category.reply_prompt
@@ -370,7 +443,7 @@ async def classify_and_notify_background(
             )
             if should_generate_reply:
                 try:
-                    ai_reply = await asyncio.wait_for(
+                    ai_reply, urgency_type = await asyncio.wait_for(
                         generate_reply_with_ai(description, matched_category, actor_name),
                         timeout=60.0,
                     )
@@ -385,6 +458,7 @@ async def classify_and_notify_background(
             post.ai_reasoning = reasoning
             post.ai_reply = ai_reply
             post.area = detected_area
+            post.urgency_type = urgency_type if urgency_type != "general" else None
             post.status = "classified"
 
             now = datetime.utcnow()
@@ -403,7 +477,7 @@ async def classify_and_notify_background(
                     post.status = "ignored"
 
             await session.commit()
-            logger.info(f"✅ Background: Post {post_id} classified → status={post.status}, category={cat_id}, area={detected_area}")
+            logger.info(f"✅ Background: Post {post_id} classified → status={post.status}, category={cat_id}, area={detected_area}, urgency={urgency_type}")
 
         except Exception as e:
             logger.error(f"❌ Background classification failed for post {post_id}: {e}")

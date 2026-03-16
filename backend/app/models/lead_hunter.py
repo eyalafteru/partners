@@ -153,6 +153,9 @@ class LeadPost(Base):
     # אזור גיאוגרפי שזוהה על ידי AI
     area = Column(String(50), nullable=True)
 
+    # תת-סוג דחיפות (עבור קטגוריית הובלות): urgent / exploring / professional / general
+    urgency_type = Column(String(20), nullable=True)
+
     # תגובה אוטומטית דרך תוסף Chrome
     auto_reply_enabled = Column(Boolean, default=False)
     auto_reply_sent = Column(Boolean, default=False)
