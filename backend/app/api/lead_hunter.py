@@ -334,10 +334,11 @@ async def _generate_reply_after_category_change(post_id: int, new_category_id: i
             )).scalar_one_or_none()
             actor_name = actor.actor_name if actor else ""
 
-            new_reply = await generate_reply_with_ai(post.description, category, actor_name)
+            new_reply, urgency_type = await generate_reply_with_ai(post.description, category, actor_name)
             post.ai_reply = new_reply
+            post.urgency_type = urgency_type if urgency_type != "general" else None
             await session.commit()
-            logger.info(f"Auto-generated reply for post {post_id} after category change")
+            logger.info(f"Auto-generated reply for post {post_id} after category change (urgency={urgency_type})")
     except Exception as e:
         logger.error(f"Failed to generate reply for post {post_id}: {e}")
 
@@ -391,11 +392,12 @@ async def regenerate_reply(
     actor = actor_result.scalar_one_or_none()
     actor_name = actor.actor_name if actor else "לא ידוע"
 
-    new_reply = await generate_reply_with_ai(post.description, category, actor_name)
+    new_reply, urgency_type = await generate_reply_with_ai(post.description, category, actor_name)
     post.ai_reply = new_reply
+    post.urgency_type = urgency_type if urgency_type != "general" else None
 
     await session.commit()
-    return {"success": True, "ai_reply": new_reply}
+    return {"success": True, "ai_reply": new_reply, "urgency_type": urgency_type}
 
 
 # ============================================================
