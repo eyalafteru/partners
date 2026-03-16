@@ -62,19 +62,48 @@ async function humanType(el, text) {
   el.focus();
   await sleep(300);
 
-  for (const char of text) {
-    // Use InputEvent for contenteditable, keyboard events for textarea
-    if (el.isContentEditable) {
-      document.execCommand("insertText", false, char);
+  log("info", `Typing ${text.length} chars into ${el.isContentEditable ? "contenteditable" : "textarea"}...`);
+
+  if (el.isContentEditable) {
+    // Try execCommand first (works when tab is active/focused)
+    const testResult = document.execCommand("insertText", false, text.charAt(0));
+    await sleep(50);
+
+    const editorHasContent = (el.textContent || "").length > 0;
+    if (testResult && editorHasContent) {
+      log("info", "execCommand works, typing char-by-char");
+      // First char already typed, continue with the rest
+      for (let i = 1; i < text.length; i++) {
+        document.execCommand("insertText", false, text.charAt(i));
+        await sleep(30 + Math.random() * 70);
+      }
     } else {
+      log("warn", `execCommand failed (returned=${testResult}, content="${el.textContent}"), using clipboard fallback`);
+      // Clear any partial content
+      el.textContent = "";
+      el.focus();
+      await sleep(100);
+
+      // Fallback: set textContent + dispatch InputEvent
+      el.textContent = text;
+      el.dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertText",
+        data: text,
+      }));
+    }
+  } else {
+    for (const char of text) {
       const prevVal = el.value || "";
       el.value = prevVal + char;
       el.dispatchEvent(new Event("input", { bubbles: true }));
+      await sleep(30 + Math.random() * 70);
     }
-    await sleep(30 + Math.random() * 70);
   }
 
   await sleep(200);
+  const finalText = el.isContentEditable ? (el.textContent || "") : (el.value || "");
+  log("info", `Typing complete. Editor content length: ${finalText.length}`);
 }
 
 // Find the comment element by comment ID or commenter name
@@ -214,8 +243,10 @@ async function executeReplyTask(task) {
     log("info", "Found general comment editor, typing reply...");
     await scrollToElement(editor);
     await humanType(editor, task.reply_message);
+    log("info", "Typing done, preparing to submit...");
     await sleep(500);
-    await submitReply(editor);
+    const submitted = await submitReply(editor);
+    log("info", `Submit result: ${submitted}`);
     await sleep(2000);
 
     return { success: true, method: "general_comment" };

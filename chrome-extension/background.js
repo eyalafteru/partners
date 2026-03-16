@@ -320,8 +320,8 @@ async function executeTaskInTab(task) {
   const postUrl = task.post_url;
   await sendBackendLog("info", `Opening tab: ${postUrl}`, task.reply_id);
 
-  // Open Facebook post in a new tab
-  const tab = await chrome.tabs.create({ url: postUrl, active: false });
+  // Open Facebook post in a new tab (must be active for execCommand to work)
+  const tab = await chrome.tabs.create({ url: postUrl, active: true });
 
   // Wait for tab to finish loading
   await new Promise((resolve) => {

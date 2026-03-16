@@ -360,9 +360,15 @@ async def classify_and_notify_background(
                         matched_category = c
                         break
 
-            # AI reply - רק אם האזור מאפשר
+            # AI reply - מייצר אם הקטגוריה דורשת התראה או תגובה אוטומטית
             ai_reply = ""
-            if matched_category and matched_category.is_alert_worthy and area_reply_enabled:
+            should_generate_reply = (
+                matched_category
+                and matched_category.reply_prompt
+                and area_reply_enabled
+                and (matched_category.is_alert_worthy or matched_category.auto_reply_enabled)
+            )
+            if should_generate_reply:
                 try:
                     ai_reply = await asyncio.wait_for(
                         generate_reply_with_ai(description, matched_category, actor_name),
@@ -370,7 +376,7 @@ async def classify_and_notify_background(
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"⏱️ AI reply generation timed out for post {post_id}")
-            elif matched_category and matched_category.is_alert_worthy and not area_reply_enabled:
+            elif matched_category and (matched_category.is_alert_worthy or matched_category.auto_reply_enabled) and not area_reply_enabled:
                 logger.info(f"📍 Skipping reply for post {post_id} - area '{detected_area}' has reply disabled")
 
             # עדכון post
