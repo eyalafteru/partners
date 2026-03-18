@@ -36,6 +36,8 @@ ISRAEL_UTC_OFFSET = 2   # UTC+2 (חורף), לעדכן ל-3 בקיץ
 PRIORITY_AREA = "מרכז"
 BRAVE_ALERT_PHONE = "0542575412"
 BRAVE_STUCK_ALERT_MINUTES = 20  # אם pending תקוע 20 דק = Brave לא פעיל
+APPROVAL_PHONE = "0542575412"
+REQUIRE_WHATSAPP_APPROVAL = True  # True = שולח WhatsApp לאישור לפני פרסום. False = ישירות ל-Chrome
 
 # מגבלה יומית דינמית -- עולה בהדרגה כדי להיראות טבעי
 # (יום_התחלה, יום_סיום, מינימום, מקסימום)
@@ -155,10 +157,10 @@ async def _check_brave_and_alert(session):
 
 
 async def _count_pending_tasks(session) -> int:
-    """ספירת משימות pending שמחכות לתוסף Chrome."""
+    """ספירת משימות בתהליך: awaiting_approval + pending + working."""
     result = await session.execute(
         select(func.count(LeadPost.id)).where(
-            LeadPost.auto_reply_status.in_(["pending", "working"])
+            LeadPost.auto_reply_status.in_(["awaiting_approval", "pending", "working"])
         )
     )
     return result.scalar_one() or 0
@@ -192,6 +194,44 @@ async def _is_duplicate_url(session, post_url: str) -> bool:
     )
     count = result.scalar_one() or 0
     return count > 0
+
+
+async def _send_approval_whatsapp(post: LeadPost, category: LeadCategory):
+    """שליחת הודעת WhatsApp לאישור תגובה אוטומטית."""
+    from app.services.whatsapp_service import get_whatsapp_service
+    ws = get_whatsapp_service()
+
+    if not ws.is_configured:
+        logger.warning(f"🎯 ⚠️ Lead Hunter: WhatsApp not configured, cannot send approval for post {post.id}")
+        return
+
+    desc_preview = (post.description or "")[:200]
+    if len(post.description or "") > 200:
+        desc_preview += "..."
+
+    reply_preview = (post.ai_reply or "")[:300]
+    if len(post.ai_reply or "") > 300:
+        reply_preview += "..."
+
+    message = (
+        f"🎯 *אישור תגובה אוטומטית*\n\n"
+        f"📋 פוסט #{post.id}\n"
+        f"📁 {post.group_name or 'קבוצה לא ידועה'}\n"
+        f"📍 אזור: {post.area or 'לא ידוע'}\n\n"
+        f"📝 *הפוסט:*\n{desc_preview}\n\n"
+        f"💬 *תגובה מוצעת:*\n{reply_preview}\n\n"
+        f"✅ השב *1* לאישור פרסום\n"
+        f"❌ השב *0* לדחייה"
+    )
+
+    try:
+        result = await ws.send_to_phone(APPROVAL_PHONE, message)
+        if result.get("success"):
+            logger.info(f"🎯 📩 Lead Hunter: approval WhatsApp sent for post {post.id}")
+        else:
+            logger.error(f"🎯 ❌ Lead Hunter: failed to send approval WhatsApp for post {post.id}: {result.get('error')}")
+    except Exception as e:
+        logger.error(f"🎯 ❌ Lead Hunter: approval WhatsApp exception for post {post.id}: {e}")
 
 
 async def queue_lead_hunter_replies():
@@ -345,15 +385,27 @@ async def queue_lead_hunter_replies():
                         )
                         continue
 
-                    # --- סימון pending ---
-                    post.auto_reply_status = "pending"
-                    total_queued += 1
-                    logger.info(
-                        f"🎯 ✅ Lead Hunter: queued post {post.id} for auto-reply "
-                        f"(category='{category.name}', area='{post.area}', "
-                        f"sent_today={sent_today}/{daily_limit}, "
-                        f"url={post.post_url})"
-                    )
+                    # --- סימון לפרסום (עם או בלי אישור WhatsApp) ---
+                    if REQUIRE_WHATSAPP_APPROVAL:
+                        post.auto_reply_status = "awaiting_approval"
+                        total_queued += 1
+                        logger.info(
+                            f"🎯 📩 Lead Hunter: post {post.id} awaiting WhatsApp approval "
+                            f"(category='{category.name}', area='{post.area}', "
+                            f"sent_today={sent_today}/{daily_limit}, "
+                            f"url={post.post_url})"
+                        )
+                        await session.flush()
+                        await _send_approval_whatsapp(post, category)
+                    else:
+                        post.auto_reply_status = "pending"
+                        total_queued += 1
+                        logger.info(
+                            f"🎯 ✅ Lead Hunter: queued post {post.id} for auto-reply "
+                            f"(category='{category.name}', area='{post.area}', "
+                            f"sent_today={sent_today}/{daily_limit}, "
+                            f"url={post.post_url})"
+                        )
 
                     if total_queued >= MAX_PER_BATCH:
                         break
@@ -382,7 +434,8 @@ async def start_lead_hunter_reply_task():
         f"hours={ACTIVE_HOUR_START:02d}:00-{ACTIVE_HOUR_END:02d}:00 IL, "
         f"stuck_timeout={STUCK_TASK_TIMEOUT_MINUTES}min, "
         f"priority_area='{PRIORITY_AREA}', "
-        f"brave_alert_phone={BRAVE_ALERT_PHONE})"
+        f"brave_alert_phone={BRAVE_ALERT_PHONE}, "
+        f"whatsapp_approval={'ON' if REQUIRE_WHATSAPP_APPROVAL else 'OFF'})"
     )
 
     while True:

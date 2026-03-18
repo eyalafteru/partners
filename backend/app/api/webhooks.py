@@ -8,6 +8,7 @@ from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+from loguru import logger
 
 from app.database import get_async_session
 from app.models.communication import Communication
@@ -15,6 +16,69 @@ from app.models.lead import Lead
 from app.models import Blacklist
 
 router = APIRouter()
+
+LEAD_HUNTER_APPROVAL_PHONE = "0542575412"
+
+
+def _normalize_phone(raw: str) -> str:
+    """נרמול מספר טלפון: 972542575412@c.us -> 0542575412"""
+    phone = raw.replace("@c.us", "").replace("@g.us", "").replace("+", "")
+    if phone.startswith("972") and len(phone) > 3:
+        phone = "0" + phone[3:]
+    return phone
+
+
+async def _handle_lead_hunter_approval(message: str, session: AsyncSession) -> dict | None:
+    """
+    טיפול בהודעות אישור/דחייה של Lead Hunter.
+    מחזיר dict תשובה אם טופל, או None אם לא רלוונטי.
+    """
+    text = message.strip()
+    if text not in ("1", "0"):
+        return None
+
+    from app.models.lead_hunter import LeadPost
+
+    result = await session.execute(
+        select(LeadPost)
+        .where(LeadPost.auto_reply_status == "awaiting_approval")
+        .order_by(LeadPost.created_at.asc())
+        .limit(1)
+    )
+    post = result.scalar_one_or_none()
+
+    if not post:
+        from app.services.whatsapp_service import get_whatsapp_service
+        ws = get_whatsapp_service()
+        if ws.is_configured:
+            await ws.send_to_phone(LEAD_HUNTER_APPROVAL_PHONE, "אין תגובות ממתינות לאישור כרגע.")
+        logger.info("🎯 Lead Hunter approval: no posts awaiting approval")
+        return {"status": "no_posts_awaiting"}
+
+    from app.services.whatsapp_service import get_whatsapp_service
+    ws = get_whatsapp_service()
+
+    if text == "1":
+        post.auto_reply_status = "pending"
+        await session.commit()
+        logger.info(f"🎯 ✅ Lead Hunter approval: post {post.id} APPROVED -> pending")
+        if ws.is_configured:
+            await ws.send_to_phone(
+                LEAD_HUNTER_APPROVAL_PHONE,
+                f"✅ אושר! פוסט #{post.id} עובר לפרסום."
+            )
+        return {"status": "approved", "post_id": post.id}
+
+    else:  # text == "0"
+        post.auto_reply_status = "skipped"
+        await session.commit()
+        logger.info(f"🎯 ❌ Lead Hunter approval: post {post.id} REJECTED -> skipped")
+        if ws.is_configured:
+            await ws.send_to_phone(
+                LEAD_HUNTER_APPROVAL_PHONE,
+                f"❌ נדחה. פוסט #{post.id} לא יפורסם."
+            )
+        return {"status": "rejected", "post_id": post.id}
 
 
 # ========== Green-API WhatsApp Webhook ==========
@@ -70,6 +134,13 @@ async def whatsapp_webhook(
         if not message_body:
             # אולי הודעת מדיה
             return {"status": "ignored", "reason": "not text message"}
+        
+        # --- Lead Hunter: אישור/דחייה דרך WhatsApp ---
+        sender_normalized = _normalize_phone(chat_id)
+        if sender_normalized == LEAD_HUNTER_APPROVAL_PHONE:
+            approval_result = await _handle_lead_hunter_approval(message_body, session)
+            if approval_result is not None:
+                return approval_result
         
         # חיפוש הליד לפי טלפון
         result = await session.execute(
