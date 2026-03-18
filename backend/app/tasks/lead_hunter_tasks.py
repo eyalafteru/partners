@@ -3,19 +3,22 @@ PartnerCalc OS - Lead Hunter Auto-Reply Tasks
 משימות רקע לתגובה אוטומטית על פוסטים שנקלטו מפושר
 
 הגנות בטיחות מפני חסימות פייסבוק:
-- חלון שעות פעילות (07:00-22:00 שעון ישראל)
+- חלון שעות פעילות (07:00-23:00 שעון ישראל)
+- מגבלה יומית דינמית (עולה בהדרגה לפי ימים פעילים)
+- עדיפות לאזור מרכז
 - מרווח מינימלי בין תגובות (8-15 דקות)
 - הגבלת תור (מקסימום 3 pending בו-זמנית)
 - ניקוי משימות תקועות (working > 30 דקות)
 - הגנת כפילויות (לא מגיבים פעמיים לאותו post_url)
-- מגבלה יומית לפי קטגוריה
 - מגבלת באצ' (1 תגובה למחזור)
+- התראת WhatsApp כש-Brave לא פעיל
 """
 import asyncio
+import hashlib
 import random
 from datetime import datetime, timedelta, timezone
 from loguru import logger
-from sqlalchemy import select, and_, func, or_
+from sqlalchemy import select, and_, func, case, or_
 
 from app.database import get_async_session_context
 from app.models.lead_hunter import LeadPost, LeadCategory, LeadArea
@@ -28,8 +31,47 @@ MIN_GAP_BETWEEN_REPLIES_MIN = 8
 MAX_GAP_BETWEEN_REPLIES_MIN = 15
 STUCK_TASK_TIMEOUT_MINUTES = 30
 ACTIVE_HOUR_START = 7   # 07:00 שעון ישראל
-ACTIVE_HOUR_END = 22    # 22:00 שעון ישראל
+ACTIVE_HOUR_END = 23    # 23:00 שעון ישראל
 ISRAEL_UTC_OFFSET = 2   # UTC+2 (חורף), לעדכן ל-3 בקיץ
+PRIORITY_AREA = "מרכז"
+BRAVE_ALERT_PHONE = "0542575412"
+BRAVE_STUCK_ALERT_MINUTES = 20  # אם pending תקוע 20 דק = Brave לא פעיל
+
+# מגבלה יומית דינמית -- עולה בהדרגה כדי להיראות טבעי
+# (יום_התחלה, יום_סיום, מינימום, מקסימום)
+DAILY_LIMIT_SCHEDULE = [
+    (1, 2, 5, 5),      # ימים 1-2: בדיוק 5
+    (3, 5, 5, 8),      # ימים 3-5: 5-8 אקראי
+    (6, 9, 7, 11),     # ימים 6-9: 7-11 אקראי
+    (10, 14, 10, 15),  # ימים 10-14: 10-15 אקראי
+    (15, 999, 12, 18), # יום 15+: 12-18 אקראי
+]
+
+
+def _get_dynamic_daily_limit(activation_date: datetime | None) -> int:
+    """
+    מחשב מגבלה יומית דינמית לפי מספר הימים מאז ההפעלה.
+    המגבלה עולה בהדרגה ומשתנה באופן אקראי-יציב (אותו ערך לאותו יום).
+    """
+    if not activation_date:
+        return 5
+
+    days_active = (datetime.utcnow() - activation_date).days + 1
+
+    for start_day, end_day, min_limit, max_limit in DAILY_LIMIT_SCHEDULE:
+        if start_day <= days_active <= end_day:
+            # seed אקראי-יציב לפי התאריך (אותו מספר לאותו יום)
+            date_seed = datetime.utcnow().strftime("%Y-%m-%d")
+            seed = int(hashlib.md5(date_seed.encode()).hexdigest()[:8], 16)
+            rng = random.Random(seed)
+            limit = rng.randint(min_limit, max_limit)
+            logger.debug(
+                f"🎯 📈 Lead Hunter: day {days_active} -> daily limit={limit} "
+                f"(range {min_limit}-{max_limit})"
+            )
+            return limit
+
+    return 5
 
 
 def _is_active_hours() -> bool:
@@ -60,6 +102,56 @@ async def _cleanup_stuck_tasks(session) -> int:
         )
 
     return len(stuck_posts)
+
+
+async def _check_brave_and_alert(session):
+    """
+    אם יש משימה pending שלא נלקחה מעל 20 דקות = Brave לא פעיל.
+    שולח התראת WhatsApp פעם אחת (לא ספאם).
+    """
+    alert_cutoff = datetime.utcnow() - timedelta(minutes=BRAVE_STUCK_ALERT_MINUTES)
+    result = await session.execute(
+        select(LeadPost).where(
+            and_(
+                LeadPost.auto_reply_status == "pending",
+                LeadPost.updated_at <= alert_cutoff,
+            )
+        ).limit(1)
+    )
+    stuck_pending = result.scalar_one_or_none()
+
+    if not stuck_pending:
+        return
+
+    from app.services.whatsapp_service import get_whatsapp_service
+    ws = get_whatsapp_service()
+
+    if not ws.is_configured:
+        logger.warning("🎯 ⚠️ Lead Hunter: Brave appears down but WhatsApp not configured")
+        return
+
+    # בדיקה שלא שלחנו התראה בשעה האחרונה (למנוע ספאם)
+    cache_key = f"brave_alert_{datetime.utcnow().strftime('%Y-%m-%d-%H')}"
+    if getattr(_check_brave_and_alert, '_last_alert', None) == cache_key:
+        return
+
+    logger.warning(
+        f"🎯 🚨 Lead Hunter: Brave appears down! "
+        f"Post {stuck_pending.id} pending for >{BRAVE_STUCK_ALERT_MINUTES}min. "
+        f"Sending WhatsApp alert to {BRAVE_ALERT_PHONE}"
+    )
+
+    try:
+        await ws.send_to_phone(
+            BRAVE_ALERT_PHONE,
+            f"⚠️ *Lead Hunter - Brave לא פעיל*\n\n"
+            f"יש משימת תגובה (post {stuck_pending.id}) שממתינה כבר "
+            f"{BRAVE_STUCK_ALERT_MINUTES} דקות.\n"
+            f"נא לוודא ש-Brave פתוח עם התוסף פעיל."
+        )
+        _check_brave_and_alert._last_alert = cache_key
+    except Exception as e:
+        logger.error(f"🎯 ❌ Failed to send Brave alert WhatsApp: {e}")
 
 
 async def _count_pending_tasks(session) -> int:
@@ -126,6 +218,9 @@ async def queue_lead_hunter_replies():
                 logger.info(f"🎯 🧹 Lead Hunter: cleaned {stuck_count} stuck tasks")
                 await session.commit()
 
+            # --- התראת Brave ---
+            await _check_brave_and_alert(session)
+
             # --- הגנה 2: הגבלת תור ---
             pending_count = await _count_pending_tasks(session)
             if pending_count >= MAX_PENDING_TASKS:
@@ -138,13 +233,14 @@ async def queue_lead_hunter_replies():
             # --- הגנה 3: מרווח מינימלי בין תגובות ---
             last_reply_time = await _get_last_reply_time(session)
             if last_reply_time:
-                min_gap = timedelta(minutes=MIN_GAP_BETWEEN_REPLIES_MIN)
+                random_gap = random.randint(MIN_GAP_BETWEEN_REPLIES_MIN, MAX_GAP_BETWEEN_REPLIES_MIN)
+                min_gap = timedelta(minutes=random_gap)
                 time_since_last = datetime.utcnow() - last_reply_time
                 if time_since_last < min_gap:
                     remaining = min_gap - time_since_last
                     logger.debug(
                         f"🎯 ⏳ Lead Hunter: last reply was {time_since_last.total_seconds():.0f}s ago, "
-                        f"minimum gap is {MIN_GAP_BETWEEN_REPLIES_MIN}min, "
+                        f"random gap is {random_gap}min, "
                         f"waiting {remaining.total_seconds():.0f}s more"
                     )
                     return
@@ -175,9 +271,11 @@ async def queue_lead_hunter_replies():
 
             for category in categories:
                 delay_minutes = category.auto_reply_delay_minutes or 10
-                daily_limit = category.auto_reply_daily_limit or 10
                 cutoff = datetime.utcnow() - timedelta(minutes=delay_minutes)
                 max_age_cutoff = datetime.utcnow() - timedelta(hours=MAX_POST_AGE_HOURS)
+
+                # --- מגבלה יומית דינמית ---
+                daily_limit = _get_dynamic_daily_limit(category.updated_at)
 
                 today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
                 sent_today_result = await session.execute(
@@ -201,6 +299,12 @@ async def queue_lead_hunter_replies():
                 remaining = daily_limit - sent_today
                 batch_limit = min(MAX_PER_BATCH, remaining)
 
+                # --- שליפת פוסטים עם עדיפות לאזור מרכז ---
+                area_priority = case(
+                    (LeadPost.area == PRIORITY_AREA, 0),
+                    else_=1,
+                )
+
                 eligible_result = await session.execute(
                     select(LeadPost).where(
                         and_(
@@ -213,7 +317,7 @@ async def queue_lead_hunter_replies():
                             LeadPost.created_at <= cutoff,
                             LeadPost.created_at >= max_age_cutoff,
                         )
-                    ).order_by(LeadPost.created_at.asc()).limit(batch_limit)
+                    ).order_by(area_priority, LeadPost.created_at.asc()).limit(batch_limit)
                 )
                 eligible_posts = eligible_result.scalars().all()
 
@@ -224,7 +328,6 @@ async def queue_lead_hunter_replies():
                 )
 
                 for post in eligible_posts:
-                    # בדיקת אזור
                     area = areas.get(post.area)
                     if area and not area.is_reply_enabled:
                         logger.debug(
@@ -248,10 +351,10 @@ async def queue_lead_hunter_replies():
                     logger.info(
                         f"🎯 ✅ Lead Hunter: queued post {post.id} for auto-reply "
                         f"(category='{category.name}', area='{post.area}', "
+                        f"sent_today={sent_today}/{daily_limit}, "
                         f"url={post.post_url})"
                     )
 
-                    # רק תגובה אחת למחזור
                     if total_queued >= MAX_PER_BATCH:
                         break
 
@@ -277,7 +380,9 @@ async def start_lead_hunter_reply_task():
         f"(batch={MAX_PER_BATCH}, max_pending={MAX_PENDING_TASKS}, "
         f"gap={MIN_GAP_BETWEEN_REPLIES_MIN}-{MAX_GAP_BETWEEN_REPLIES_MIN}min, "
         f"hours={ACTIVE_HOUR_START:02d}:00-{ACTIVE_HOUR_END:02d}:00 IL, "
-        f"stuck_timeout={STUCK_TASK_TIMEOUT_MINUTES}min)"
+        f"stuck_timeout={STUCK_TASK_TIMEOUT_MINUTES}min, "
+        f"priority_area='{PRIORITY_AREA}', "
+        f"brave_alert_phone={BRAVE_ALERT_PHONE})"
     )
 
     while True:
