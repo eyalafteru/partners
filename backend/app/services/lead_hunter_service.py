@@ -141,7 +141,13 @@ HOVALOT_REPLY_PROMPT = """נתח את הפוסט הבא וזהה את סוג ה�
 מפרסם: {actor_name}
 תוכן: \"\"\"{description}\"\"\"
 
-שלב 1 - זהה מגדר: אם הפוסט כתוב בלשון נקבה (מחפשת, צריכה, רוצה) - כתוב את כל התגובה בלשון נקבה (תתקשרי, תכתבי, תבדקי, דברי). אם בלשון זכר (מחפש, צריך) - כתוב בלשון זכר (תתקשר, תכתוב, תבדוק, דבר). זה קריטי!
+שלב 1 - זהה מגדר (קריטי!):
+בדוק את הפוסט: האם כתוב "מחפשת/צריכה/רוצה" (=נקבה) או "מחפש/צריך/רוצה" (=זכר)?
+- נקבה → כל הפניות בלשון נקבה: תתקשרי, תכתבי, תבדקי, דברי איתי, אצלך, שלך
+- זכר → כל הפניות בלשון זכר: תתקשר, תכתוב, תבדוק, דבר איתי, אצלך, שלך
+- לא ברור → זכר כברירת מחדל
+
+בשורה הראשונה של התגובה שלך כתוב [נקבה] או [זכר] לפי מה שזיהית. אני אסיר את זה אחרי.
 
 שלב 2 - זהה סוג צורך: בדוק קודם מקצועי (סוג ג), אח"כ דחוף (סוג א), ולבסוף גישוש (סוג ב).
 אם הפוסט מזכיר פירוק, הרכבה, התקנה, או עבודה מקצועית - זה תמיד סוג ג, גם אם יש מילים כמו "דחוף" או "אשמח להצעת מחיר".
@@ -188,6 +194,13 @@ def detect_urgency_type(description: str) -> str:
     return "general"
 
 
+import re
+
+def _strip_gender_tag(text: str) -> str:
+    """Remove [נקבה] or [זכר] tag that the AI adds for gender tracking."""
+    return re.sub(r'^\s*\[(נקבה|זכר)\]\s*', '', text).strip()
+
+
 async def generate_reply_with_ai(
     description: str,
     category: LeadCategory,
@@ -230,7 +243,8 @@ async def generate_reply_with_ai(
                 system=REPLY_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_prompt}],
             )
-            return response.content[0].text.strip(), urgency_type
+            reply = _strip_gender_tag(response.content[0].text.strip())
+            return reply, urgency_type
         elif settings.openai_api_key:
             from openai import AsyncOpenAI
             client = AsyncOpenAI(api_key=settings.openai_api_key)
@@ -242,7 +256,8 @@ async def generate_reply_with_ai(
                     {"role": "user", "content": user_prompt},
                 ],
             )
-            return response.choices[0].message.content.strip(), urgency_type
+            reply = _strip_gender_tag(response.choices[0].message.content.strip())
+            return reply, urgency_type
     except Exception as e:
         logger.error(f"❌ Reply generation failed: {e}")
     return "", urgency_type
