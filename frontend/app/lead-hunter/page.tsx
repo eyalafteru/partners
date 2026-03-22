@@ -148,8 +148,8 @@ export default function LeadHunterPage() {
     } catch {}
   }, []);
 
-  const fetchPosts = useCallback(async () => {
-    setLoading(true);
+  const fetchPosts = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const params = new URLSearchParams();
       if (filterStatus) params.set('status', filterStatus);
@@ -167,7 +167,7 @@ export default function LeadHunterPage() {
         setTotal(data.total);
       }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [filterStatus, filterCategory, filterArea, filterReplied, offset]);
 
@@ -181,11 +181,11 @@ export default function LeadHunterPage() {
     fetchPosts();
   }, [fetchPosts]);
 
-  // Auto-refresh every 30s
+  // Auto-refresh every 30s (silent – no loading spinner, no scroll jump)
   useEffect(() => {
     const interval = setInterval(() => {
       fetchStats();
-      fetchPosts();
+      fetchPosts(true);
     }, 30_000);
     return () => clearInterval(interval);
   }, [fetchStats, fetchPosts]);
