@@ -194,6 +194,7 @@ async def get_posts(
             "area": post.area,
             "status": post.status,
             "ai_reply": post.ai_reply,
+            "auto_reply_status": post.auto_reply_status,
             "ai_confidence": post.ai_confidence,
             "ai_reasoning": post.ai_reasoning,
             "whatsapp_sent": post.whatsapp_sent,

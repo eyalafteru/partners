@@ -31,6 +31,7 @@ interface Post {
   area: string | null;
   status: string;
   ai_reply: string | null;
+  auto_reply_status: string | null;
   ai_confidence: number | null;
   ai_reasoning: string | null;
   whatsapp_sent: boolean;
@@ -399,9 +400,10 @@ export default function LeadHunterPage() {
               {posts.map((post) => {
                 const isExpanded = expandedPost === post.id;
                 const statusInfo = STATUS_LABELS[post.status] || { label: post.status, color: 'bg-gray-100 text-gray-600' };
+                const isGroupBlocked = post.auto_reply_status === 'group_blocked';
 
                 return (
-                  <div key={post.id} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                  <div key={post.id} className={`rounded-xl shadow-sm border overflow-hidden ${isGroupBlocked ? 'bg-gray-200 border-gray-300 opacity-60' : 'bg-white border-gray-100'}`}>
                     {/* Post Header */}
                     <div className="p-4">
                       <div className="flex items-start justify-between gap-3">
@@ -466,6 +468,9 @@ export default function LeadHunterPage() {
                               </a>
                             ) : (
                               <span className="text-gray-600 font-medium">{post.group_name}</span>
+                            )}
+                            {isGroupBlocked && (
+                              <span className="bg-red-100 text-red-600 text-xs px-2 py-0.5 rounded-full font-medium">🚫 חסום בקבוצה</span>
                             )}
                           </span>
                         )}
