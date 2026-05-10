@@ -122,6 +122,7 @@ export default function LeadHunterPage() {
   const [editingCategory, setEditingCategory] = useState<FullCategory | null>(null);
   const [savingCategory, setSavingCategory] = useState(false);
   const [regenerating, setRegenerating] = useState<number | null>(null);
+  const [publishing, setPublishing] = useState<number | null>(null);
   const [savingArea, setSavingArea] = useState<number | null>(null);
 
   // ============================================================
@@ -235,6 +236,21 @@ export default function LeadHunterPage() {
       fetchPosts();
     } finally {
       setRegenerating(null);
+    }
+  };
+
+  const publishReply = async (postId: number) => {
+    if (!confirm('לפרסם את התגובה דרך התוסף?')) return;
+    setPublishing(postId);
+    try {
+      const res = await fetch(`${API}/api/lead-hunter/posts/${postId}/publish-reply`, { method: 'POST' });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.detail || 'שגיאה בפרסום');
+      }
+      fetchPosts();
+    } finally {
+      setPublishing(null);
     }
   };
 
@@ -529,6 +545,26 @@ export default function LeadHunterPage() {
                         >
                           {regenerating === post.id ? '⏳...' : '💡 ייצר תגובה'}
                         </button>
+                      )}
+
+                      {/* Publish via Extension */}
+                      {post.ai_reply && post.auto_reply_status !== 'posted' && post.auto_reply_status !== 'pending' && post.auto_reply_status !== 'working' && post.auto_reply_status !== 'group_blocked' && (
+                        <button
+                          onClick={() => publishReply(post.id)}
+                          disabled={publishing === post.id}
+                          className="text-xs px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+                        >
+                          {publishing === post.id ? '⏳...' : '🚀 פרסם תגובה'}
+                        </button>
+                      )}
+                      {post.auto_reply_status === 'pending' && (
+                        <span className="text-xs px-3 py-1.5 bg-yellow-100 text-yellow-700 rounded-lg">⏳ ממתין לפרסום</span>
+                      )}
+                      {post.auto_reply_status === 'working' && (
+                        <span className="text-xs px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg">🔄 מפרסם...</span>
+                      )}
+                      {post.auto_reply_status === 'posted' && (
+                        <span className="text-xs px-3 py-1.5 bg-green-100 text-green-700 rounded-lg">✅ פורסם</span>
                       )}
 
                       {/* Links */}

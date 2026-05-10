@@ -401,6 +401,33 @@ async def regenerate_reply(
     return {"success": True, "ai_reply": new_reply, "urgency_type": urgency_type}
 
 
+@router.post("/posts/{post_id}/publish-reply")
+async def publish_reply(
+    post_id: int,
+    session: AsyncSession = Depends(get_async_session),
+):
+    """שליחת תגובה לפרסום דרך ה-Chrome Extension"""
+    result = await session.execute(select(LeadPost).where(LeadPost.id == post_id))
+    post = result.scalar_one_or_none()
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    if not post.ai_reply:
+        raise HTTPException(status_code=400, detail="Post has no AI reply to publish")
+
+    if not post.post_url:
+        raise HTTPException(status_code=400, detail="Post has no URL")
+
+    if post.auto_reply_status in ("pending", "working", "posted"):
+        raise HTTPException(status_code=400, detail=f"Post already in status: {post.auto_reply_status}")
+
+    post.auto_reply_status = "pending"
+    await session.commit()
+
+    logger.info(f"📤 Manual publish queued for post {post.id}")
+    return {"success": True, "post_id": post.id, "status": "pending"}
+
+
 # ============================================================
 #  Categories
 # ============================================================
