@@ -487,15 +487,16 @@ async def classify_and_notify_background(
             elif matched_category and (matched_category.is_alert_worthy or matched_category.auto_reply_enabled) and not area_reply_enabled:
                 logger.info(f"📍 Skipping reply for post {post_id} - area '{detected_area}' has reply disabled")
 
-            # 50/50 banner vs text reply (only for hovalah category with a reply)
+            # Banner replies disabled -- rebuilding account trust first.
+            # To re-enable: uncomment the block below (50/50 banner vs text).
             reply_type = "text"
             banner_type_val = None
-            if ai_reply and matched_category and "הובלה" in matched_category.name:
-                if random.random() < 0.5:
-                    reply_type = "banner"
-                    banner_type_val = choose_banner_type(description)
-                    ai_reply = BANNER_REPLY_TEXT
-                    logger.info(f"🖼️ Banner reply chosen for post {post_id}: type={banner_type_val}")
+            # if ai_reply and matched_category and "הובלה" in matched_category.name:
+            #     if random.random() < 0.5:
+            #         reply_type = "banner"
+            #         banner_type_val = choose_banner_type(description)
+            #         ai_reply = BANNER_REPLY_TEXT
+            #         logger.info(f"🖼️ Banner reply chosen for post {post_id}: type={banner_type_val}")
 
             # עדכון post
             post.category_id = cat_id if cat_id and cat_id > 0 else None

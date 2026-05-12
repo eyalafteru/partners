@@ -356,10 +356,48 @@ GREENAPI_URL=https://7105.api.greenapi.com
 
 הסקריפט נמצא ב: `scripts/lead_hunter_sheets.gs`
 
-- **גיליון**: [all_posts](https://docs.google.com/spreadsheets/d/1gwwBf6-7cqEerBdg8ZhyeXsuy9tlGwVD8ROJiRfIhl8)
+- **גיליון Apps Script (ישן)**: [all_posts](https://docs.google.com/spreadsheets/d/1gwwBf6-7cqEerBdg8ZhyeXsuy9tlGwVD8ROJiRfIhl8)
+- **גיליון פושר (מקור הנתונים)**: [Posts](https://docs.google.com/spreadsheets/d/1Xbor7YEr_apjvmQZ9QYU01UKwKk_EKqlUTH_7C69LIU/edit?gid=128669743#gid=128669743)
+  - גיליון `posts` -- פושר כותב לכאן פוסטים מקבוצות פייסבוק
+  - עמודות: url, description, group_name, group_url, author_name, author_url, posted_at, created_at, sent
 - **שורת התחלה**: 171 (שורות 1-170 הן נתונים ישנים)
 - **תדירות**: כל 5 דקות אוטומטית
 - **Token**: `lead-hunter-secret-2024`
+
+---
+
+## 💬 אסטרטגיית תגובות בפייסבוק
+
+### מצב נוכחי (מאי 2026): טקסט בלבד
+- תגובות **קצרות** (משפט אחד), **ללא לינקים**, **ללא תמונות**, **ללא מספרי טלפון**
+- מטרה: בניית אמינות לחשבון משה עובדיה אחרי חסימות ותגובות Pending
+- סגנון: המלצה טבעית על "הובלות בישראל" בלי קישורים חיצוניים
+- דוגמאות: "תנסי עם הובלות בישראל", "כדאי לבדוק עם הובלות בישראל"
+
+### באנרים (מושבת זמנית - שמור לעתיד)
+תמונות באנר מוכנות בתיקייה `chrome-extension/banners/`:
+- `savings.png` - באנר חיסכון ("חסכו עד 40%")
+- `trust.png` - באנר אמינות ("מובילים מאומתים")
+
+הלוגיקה קיימת בקוד (מושבתת):
+- `backend/app/services/lead_hunter_service.py` - חלוקה 50/50 בין טקסט לבאנר (מסומן כהערה)
+- `chrome-extension/facebook_reply.js` - פונקציית `attachBannerImage` לצירוף תמונה
+- DB columns: `lead_posts.reply_type`, `lead_posts.banner_type`
+
+**להפעלה מחדש:** הסר הערות מהבלוק ב-`classify_and_notify_background` ב-`lead_hunter_service.py`
+
+---
+
+## 🚫 קבוצות פייסבוק חסומות
+
+קבוצות שבהן חשבון משה עובדיה חסום ולא ניתן להגיב (פוסטים מסומנים באפור במערכת):
+
+| קבוצה | קישור |
+|--------|--------|
+| הובלות, הובלות קטנות, הובלות דירות, הרכבות, מובילים ממומלצים, חיפוש מובילים | https://www.facebook.com/groups/1629283237109586 |
+| באר שבע ביחד | https://www.facebook.com/groups/BeerShevaTogether/ |
+
+> עודכן: מאי 2026
 
 ---
 
