@@ -32,7 +32,7 @@ MAX_GAP_BETWEEN_REPLIES_MIN = 15
 STUCK_TASK_TIMEOUT_MINUTES = 30
 ACTIVE_HOUR_START = 7   # 07:00 שעון ישראל
 ACTIVE_HOUR_END = 23    # 23:00 שעון ישראל
-ISRAEL_UTC_OFFSET = 2   # UTC+2 (חורף), לעדכן ל-3 בקיץ
+ISRAEL_UTC_OFFSET = 3   # UTC+3 (קיץ IDT). לעדכן ל-2 בחורף (אחרי אוקטובר)
 PRIORITY_AREA = "מרכז"
 BRAVE_ALERT_PHONE = "0542575412"
 BRAVE_STUCK_ALERT_MINUTES = 20  # אם pending תקוע 20 דק = Brave לא פעיל
@@ -40,14 +40,11 @@ APPROVAL_PHONE = "0542575412"
 REQUIRE_WHATSAPP_APPROVAL = False  # True = ממתין לאישור WhatsApp. False = פרסום אוטומטי + הודעה לסקירה
 SEND_WHATSAPP_NOTIFICATION = True  # True = שולח הודעת WhatsApp לסקירה (לא חוסם פרסום)
 
-# מגבלה יומית דינמית -- עולה בהדרגה כדי להיראות טבעי
-# (יום_התחלה, יום_סיום, מינימום, מקסימום)
+# מגבלה יומית הדרגתית -- שבוע 1: 10, שבוע 2: 15, שבוע 3+: 25
 DAILY_LIMIT_SCHEDULE = [
-    (1, 2, 5, 5),      # ימים 1-2: בדיוק 5
-    (3, 5, 5, 8),      # ימים 3-5: 5-8 אקראי
-    (6, 9, 7, 11),     # ימים 6-9: 7-11 אקראי
-    (10, 14, 10, 15),  # ימים 10-14: 10-15 אקראי
-    (15, 999, 12, 18), # יום 15+: 12-18 אקראי
+    (1, 7, 10, 10),     # שבוע 1: 10 ביום
+    (8, 14, 15, 15),    # שבוע 2: 15 ביום
+    (15, 999, 25, 25),  # שבוע 3+: 25 ביום
 ]
 
 

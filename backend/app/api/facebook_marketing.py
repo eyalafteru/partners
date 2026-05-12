@@ -1732,7 +1732,7 @@ async def _handle_lead_hunter_result(body: ExtensionTaskResult, session: AsyncSe
     if body.success:
         lead_post.auto_reply_sent = True
         lead_post.auto_reply_sent_at = datetime.utcnow()
-        lead_post.auto_reply_status = "sent"
+        lead_post.auto_reply_status = "posted"
         await tracker.finish(success=True)
         logger.info(f"🔌 ✅ Extension completed lead_hunter reply for post {lead_post.id}")
     else:

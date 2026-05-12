@@ -557,7 +557,7 @@ export default function LeadHunterPage() {
                       )}
 
                       {/* Publish via Extension */}
-                      {post.ai_reply && post.auto_reply_status !== 'posted' && post.auto_reply_status !== 'pending' && post.auto_reply_status !== 'working' && post.auto_reply_status !== 'group_blocked' && (
+                      {post.ai_reply && post.auto_reply_status !== 'posted' && post.auto_reply_status !== 'sent' && post.auto_reply_status !== 'pending' && post.auto_reply_status !== 'working' && post.auto_reply_status !== 'group_blocked' && (
                         <button
                           onClick={() => publishReply(post.id)}
                           disabled={publishing === post.id}
@@ -572,8 +572,11 @@ export default function LeadHunterPage() {
                       {post.auto_reply_status === 'working' && (
                         <span className="text-xs px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg">🔄 מפרסם...</span>
                       )}
-                      {post.auto_reply_status === 'posted' && (
+                      {(post.auto_reply_status === 'posted' || post.auto_reply_status === 'sent') && (
                         <span className="text-xs px-3 py-1.5 bg-green-100 text-green-700 rounded-lg">✅ פורסם</span>
+                      )}
+                      {post.auto_reply_status === 'failed' && (
+                        <span className="text-xs px-3 py-1.5 bg-red-100 text-red-700 rounded-lg">❌ נכשל</span>
                       )}
 
                       {/* Links */}
