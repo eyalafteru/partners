@@ -3,6 +3,7 @@ PartnerCalc OS - Lead Hunter Service
 סיווג פוסטים מפייסבוק ע"י AI + שליחת התראות WhatsApp
 """
 import json
+import random
 from datetime import datetime
 from typing import Optional
 from loguru import logger
@@ -168,6 +169,22 @@ HOVALOT_REPLY_PROMPT = """פוסט מפייסבוק:
 בשורה הראשונה כתוב [נקבה] או [זכר]. אני אסיר את זה אחרי.
 
 כתוב משפט אחד בלבד. החזר רק את טקסט התגובה."""
+
+
+BANNER_REPLY_TEXT = "שלחו הודעת וואטסאפ לקבלת הצעת מחיר מיידית\nhttps://wa.me/+972537101921?text=%D7%90%D7%A9%D7%9E%D7%97+%D7%9C%D7%A7%D7%91%D7%9C+%D7%94%D7%A6%D7%A2%D7%94+%D7%9C%D7%94%D7%95%D7%91%D7%9C%D7%94"
+
+PRICE_KEYWORDS = [
+    "כמה עולה", "מחיר", "הצעת מחיר", "אשמח להצעה", "עלות", "תקציב",
+    "זול", "משתלם", "חסכון", "מוזל", "מחירים", "עולה", "כסף",
+]
+
+
+def choose_banner_type(description: str) -> str:
+    text = (description or "").lower()
+    for kw in PRICE_KEYWORDS:
+        if kw in text:
+            return "savings"
+    return "trust"
 
 
 URGENCY_KEYWORDS = {
@@ -470,11 +487,23 @@ async def classify_and_notify_background(
             elif matched_category and (matched_category.is_alert_worthy or matched_category.auto_reply_enabled) and not area_reply_enabled:
                 logger.info(f"📍 Skipping reply for post {post_id} - area '{detected_area}' has reply disabled")
 
+            # 50/50 banner vs text reply (only for hovalah category with a reply)
+            reply_type = "text"
+            banner_type_val = None
+            if ai_reply and matched_category and "הובלה" in matched_category.name:
+                if random.random() < 0.5:
+                    reply_type = "banner"
+                    banner_type_val = choose_banner_type(description)
+                    ai_reply = BANNER_REPLY_TEXT
+                    logger.info(f"🖼️ Banner reply chosen for post {post_id}: type={banner_type_val}")
+
             # עדכון post
             post.category_id = cat_id if cat_id and cat_id > 0 else None
             post.ai_confidence = confidence
             post.ai_reasoning = reasoning
             post.ai_reply = ai_reply
+            post.reply_type = reply_type
+            post.banner_type = banner_type_val
             post.area = detected_area
             post.urgency_type = urgency_type if urgency_type != "general" else None
             post.status = "classified"

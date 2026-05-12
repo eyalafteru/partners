@@ -31,6 +31,8 @@ interface Post {
   area: string | null;
   status: string;
   ai_reply: string | null;
+  reply_type: string | null;
+  banner_type: string | null;
   auto_reply_status: string | null;
   ai_confidence: number | null;
   ai_reasoning: string | null;
@@ -507,7 +509,14 @@ export default function LeadHunterPage() {
                     {/* AI Reply section */}
                     {post.ai_reply && (
                       <div className="border-t border-gray-100 px-4 py-3 bg-green-50">
-                        <p className="text-xs font-medium text-green-700 mb-1">💬 תגובה מוצעת:</p>
+                        <div className="flex items-center gap-2 mb-1">
+                          <p className="text-xs font-medium text-green-700">💬 תגובה מוצעת:</p>
+                          {post.reply_type === 'banner' && (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium">
+                              🖼️ {post.banner_type === 'savings' ? 'באנר חיסכון' : 'באנר אמינות'}
+                            </span>
+                          )}
+                        </div>
                         <p className="text-sm text-gray-700 leading-relaxed">{post.ai_reply}</p>
                       </div>
                     )}

@@ -4,6 +4,9 @@
  * Runs on Facebook pages when triggered by the background service worker.
  * Receives a reply task, finds the comment, types and submits the reply.
  * Reports results back to background.js which forwards to the backend.
+ * 
+ * Human-like behavior: realistic typing speed, gaussian delays,
+ * typo simulation, page reading before commenting, natural mouse clicks.
  */
 
 const LOG_PREFIX = "[PartnerCalc Reply]";
@@ -14,7 +17,6 @@ function log(level, msg, data) {
   if (data) console[level === "error" ? "error" : "log"](text, data);
   else console[level === "error" ? "error" : "log"](text);
 
-  // Forward to background for backend logging
   try {
     chrome.runtime.sendMessage({
       action: "extensionLog",
@@ -28,6 +30,24 @@ function log(level, msg, data) {
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+// ========== Realistic Timing Helpers ==========
+
+function gaussianRandom(min, max) {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  let num = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+  num = num / 6 + 0.5;
+  num = Math.max(0, Math.min(1, num));
+  return Math.floor(min + num * (max - min));
+}
+
+function randomBetween(min, max) {
+  return Math.floor(min + Math.random() * (max - min));
+}
+
+// ========== Selectors ==========
 
 async function waitForSelector(selector, timeout = 15000) {
   const start = Date.now();
@@ -51,40 +71,120 @@ async function waitForAnySelector(selectors, timeout = 15000) {
   return null;
 }
 
-// Scroll an element into view with human-like behavior
+// ========== Human-like Interactions ==========
+
 async function scrollToElement(el) {
   el.scrollIntoView({ behavior: "smooth", block: "center" });
-  await sleep(800 + Math.random() * 400);
+  await sleep(gaussianRandom(600, 1200));
 }
 
-// Type text character by character with human-like delays
-async function humanType(el, text) {
+function simulateClick(el) {
+  const rect = el.getBoundingClientRect();
+  const x = rect.left + rect.width * (0.3 + Math.random() * 0.4);
+  const y = rect.top + rect.height * (0.3 + Math.random() * 0.4);
+
+  const eventProps = { bubbles: true, clientX: x, clientY: y };
+
+  el.dispatchEvent(new MouseEvent("mousemove", eventProps));
+  el.dispatchEvent(new MouseEvent("mousedown", { ...eventProps, button: 0 }));
+  el.dispatchEvent(new MouseEvent("mouseup", { ...eventProps, button: 0 }));
+  el.dispatchEvent(new MouseEvent("click", { ...eventProps, button: 0 }));
   el.focus();
-  await sleep(300);
+}
+
+async function simulateReading() {
+  log("info", "Simulating page reading...");
+
+  const scrollDown1 = randomBetween(250, 500);
+  window.scrollBy({ top: scrollDown1, behavior: "smooth" });
+  await sleep(gaussianRandom(2000, 4000));
+
+  const scrollDown2 = randomBetween(150, 350);
+  window.scrollBy({ top: scrollDown2, behavior: "smooth" });
+  await sleep(gaussianRandom(1500, 3500));
+
+  const scrollUp = randomBetween(100, 300);
+  window.scrollBy({ top: -scrollUp, behavior: "smooth" });
+  await sleep(gaussianRandom(1000, 2000));
+
+  log("info", "Reading simulation complete");
+}
+
+// Hebrew neighbor keys for typo simulation (standard Israeli keyboard layout)
+const HEBREW_NEIGHBORS = {
+  "ש": "דג", "ד": "שג", "ג": "שדכ", "כ": "גע", "ע": "כי",
+  "י": "עח", "ח": "יל", "ל": "חך", "ך": "לף", "ף": "ך",
+  "ק": "רא", "ר": "קא", "א": "רקט", "ט": "אם", "ם": "טו",
+  "ו": "םנ", "נ": "וב", "ב": "נה", "ה": "בת", "ת": "הצ",
+  "ץ": "ת", "צ": "תז", "ז": "צס", "ס": "זפ", "פ": "ס",
+  " ": " ",
+};
+
+function getTypoChar(original) {
+  const neighbors = HEBREW_NEIGHBORS[original];
+  if (neighbors && neighbors.length > 0) {
+    return neighbors[Math.floor(Math.random() * neighbors.length)];
+  }
+  return null;
+}
+
+// ========== Human-like Typing ==========
+
+async function humanType(el, text) {
+  simulateClick(el);
+  await sleep(gaussianRandom(800, 2000));
 
   log("info", `Typing ${text.length} chars into ${el.isContentEditable ? "contenteditable" : "textarea"}...`);
 
   if (el.isContentEditable) {
-    // Try execCommand first (works when tab is active/focused)
     const testResult = document.execCommand("insertText", false, text.charAt(0));
     await sleep(50);
 
     const editorHasContent = (el.textContent || "").length > 0;
     if (testResult && editorHasContent) {
-      log("info", "execCommand works, typing char-by-char");
-      // First char already typed, continue with the rest
+      log("info", "execCommand works, typing with human timing");
+
       for (let i = 1; i < text.length; i++) {
-        document.execCommand("insertText", false, text.charAt(i));
-        await sleep(30 + Math.random() * 70);
+        const char = text[i];
+        const prevChar = text[i - 1];
+
+        // Typo simulation: ~4% chance on non-space characters
+        if (Math.random() < 0.04 && char !== " " && char !== "\n") {
+          const typo = getTypoChar(char);
+          if (typo) {
+            document.execCommand("insertText", false, typo);
+            await sleep(gaussianRandom(80, 200));
+            document.execCommand("delete", false, null);
+            await sleep(gaussianRandom(60, 150));
+          }
+        }
+
+        document.execCommand("insertText", false, char);
+
+        // Context-dependent delays
+        if (char === " ") {
+          await sleep(gaussianRandom(150, 450));
+        } else if (".!?".includes(char)) {
+          await sleep(gaussianRandom(400, 1100));
+        } else if (",;:".includes(char)) {
+          await sleep(gaussianRandom(200, 600));
+        } else if (char === "\n") {
+          await sleep(gaussianRandom(600, 1400));
+        } else {
+          // Base typing speed, slightly faster after space (start of word burst)
+          const isWordStart = prevChar === " " || prevChar === "\n";
+          if (isWordStart) {
+            await sleep(gaussianRandom(80, 180));
+          } else {
+            await sleep(gaussianRandom(100, 250));
+          }
+        }
       }
     } else {
-      log("warn", `execCommand failed (returned=${testResult}, content="${el.textContent}"), using clipboard fallback`);
-      // Clear any partial content
+      log("warn", `execCommand failed (returned=${testResult}), using textContent fallback`);
       el.textContent = "";
       el.focus();
       await sleep(100);
-
-      // Fallback: set textContent + dispatch InputEvent
       el.textContent = text;
       el.dispatchEvent(new InputEvent("input", {
         bubbles: true,
@@ -93,20 +193,102 @@ async function humanType(el, text) {
       }));
     }
   } else {
-    for (const char of text) {
-      const prevVal = el.value || "";
-      el.value = prevVal + char;
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      el.value = (el.value || "") + char;
       el.dispatchEvent(new Event("input", { bubbles: true }));
-      await sleep(30 + Math.random() * 70);
+
+      if (char === " ") await sleep(gaussianRandom(150, 450));
+      else if (".!?".includes(char)) await sleep(gaussianRandom(400, 1100));
+      else await sleep(gaussianRandom(100, 250));
     }
   }
 
-  await sleep(200);
+  await sleep(gaussianRandom(800, 2000));
   const finalText = el.isContentEditable ? (el.textContent || "") : (el.value || "");
   log("info", `Typing complete. Editor content length: ${finalText.length}`);
 }
 
-// Find the comment element by comment ID or commenter name
+// ========== Banner Image Attachment ==========
+
+async function attachBannerImage(editor, bannerType) {
+  const bannerUrl = chrome.runtime.getURL(`banners/${bannerType}.png`);
+  log("info", `Fetching banner image: ${bannerType} from ${bannerUrl}`);
+
+  const response = await fetch(bannerUrl);
+  const blob = await response.blob();
+  const file = new File([blob], `${bannerType}.png`, { type: "image/png" });
+
+  // Strategy 1: Paste event on the editor
+  log("info", "Trying paste strategy...");
+  const dataTransfer = new DataTransfer();
+  dataTransfer.items.add(file);
+
+  const pasteEvent = new ClipboardEvent("paste", {
+    bubbles: true,
+    cancelable: true,
+    clipboardData: dataTransfer,
+  });
+  editor.dispatchEvent(pasteEvent);
+  await sleep(3000);
+
+  // Check if image appeared (Facebook shows a preview)
+  const preview = document.querySelector('img[src*="blob:"], div[data-visualcompletion] img, div[role="img"]');
+  if (preview) {
+    log("info", "Banner image attached via paste");
+    return true;
+  }
+
+  // Strategy 2: Find file input via the camera/photo button
+  log("info", "Paste did not work, trying file input strategy...");
+
+  const commentArea = editor.closest('[role="complementary"], form, [data-testid]') || editor.parentElement.parentElement.parentElement;
+
+  // Look for the image/camera button
+  const photoButtons = commentArea.querySelectorAll('[aria-label*="photo" i], [aria-label*="תמונה"], [aria-label*="צילום"], [aria-label*="image" i], [aria-label*="GIF"]');
+  let fileInput = null;
+
+  if (photoButtons.length > 0) {
+    log("info", `Found ${photoButtons.length} photo buttons, clicking first...`);
+    simulateClick(photoButtons[0]);
+    await sleep(2000);
+  }
+
+  // Look for file input that appeared
+  const inputs = document.querySelectorAll('input[type="file"][accept*="image"]');
+  if (inputs.length > 0) {
+    fileInput = inputs[inputs.length - 1];
+    log("info", "Found file input, setting files...");
+
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;
+    fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+    await sleep(3000);
+
+    log("info", "Banner image attached via file input");
+    return true;
+  }
+
+  // Strategy 3: Drop event
+  log("info", "Trying drop strategy...");
+  const dropData = new DataTransfer();
+  dropData.items.add(file);
+
+  const dropEvent = new DragEvent("drop", {
+    bubbles: true,
+    cancelable: true,
+    dataTransfer: dropData,
+  });
+  editor.dispatchEvent(dropEvent);
+  await sleep(3000);
+
+  log("warn", "All image attachment strategies attempted");
+  return false;
+}
+
+// ========== Comment Finding ==========
+
 function findComment(task) {
   log("info", `Looking for comment: id=${task.comment_id}, user=${task.commenter_name}`);
 
@@ -115,14 +297,12 @@ function findComment(task) {
 
   for (const article of allComments) {
     const text = article.textContent || "";
-    // Match by commenter name
     if (task.commenter_name && text.includes(task.commenter_name)) {
       log("info", `Matched comment by commenter name: ${task.commenter_name}`);
       return article;
     }
   }
 
-  // Fallback: try data attributes
   if (task.comment_id) {
     const byAttr = document.querySelector(`[data-commentid="${task.comment_id}"]`);
     if (byAttr) {
@@ -134,21 +314,17 @@ function findComment(task) {
   return null;
 }
 
-// Find and click the "Reply" button near a comment
-async function clickReplyButton(commentEl) {
-  const replySelectors = [
-    'div[role="button"]',
-    'span[role="button"]',
-  ];
+// ========== Reply Button ==========
 
+async function clickReplyButton(commentEl) {
   const buttons = commentEl.querySelectorAll('div[role="button"], span[role="button"]');
   for (const btn of buttons) {
     const text = (btn.textContent || "").trim().toLowerCase();
     if (text === "reply" || text === "הגב" || text === "השב" || text === "respond") {
       log("info", `Found reply button with text: "${text}"`);
       await scrollToElement(btn);
-      btn.click();
-      await sleep(1000 + Math.random() * 500);
+      simulateClick(btn);
+      await sleep(gaussianRandom(1000, 2000));
       return true;
     }
   }
@@ -157,15 +333,16 @@ async function clickReplyButton(commentEl) {
   const ariaButtons = commentEl.querySelectorAll('[aria-label*="Reply"], [aria-label*="הגב"]');
   if (ariaButtons.length > 0) {
     await scrollToElement(ariaButtons[0]);
-    ariaButtons[0].click();
-    await sleep(1000);
+    simulateClick(ariaButtons[0]);
+    await sleep(gaussianRandom(1000, 1800));
     return true;
   }
 
   return false;
 }
 
-// Find the reply editor (contenteditable or textarea)
+// ========== Reply Editor ==========
+
 async function findReplyEditor() {
   const editorSelectors = [
     'div[contenteditable="true"][role="textbox"][aria-label*="reply" i]',
@@ -186,17 +363,16 @@ async function findReplyEditor() {
   return null;
 }
 
-// Submit the reply (Enter key or submit button)
+// ========== Submit ==========
+
 async function submitReply(editorEl) {
   log("info", "Submitting reply...");
 
-  // Try pressing Enter (Facebook's default submit)
   editorEl.dispatchEvent(new KeyboardEvent("keydown", {
     key: "Enter", code: "Enter", keyCode: 13, bubbles: true,
   }));
   await sleep(500);
 
-  // Also try finding a submit button nearby
   const submitSelectors = [
     'div[aria-label="Submit"]',
     'div[aria-label="שלח"]',
@@ -210,7 +386,7 @@ async function submitReply(editorEl) {
     const btn = document.querySelector(sel);
     if (btn) {
       log("info", `Found submit button: ${sel}`);
-      btn.click();
+      simulateClick(btn);
       await sleep(1000);
       return true;
     }
@@ -220,19 +396,23 @@ async function submitReply(editorEl) {
   return true;
 }
 
-// Main reply execution flow
+// ========== Main Task Flow ==========
+
 async function executeReplyTask(task) {
   log("info", "=== Starting reply task ===", task);
 
   // Step 1: Wait for page to fully load
   log("info", "Step 1: Waiting for page to stabilize...");
-  await sleep(3000 + Math.random() * 2000);
+  await sleep(gaussianRandom(4000, 8000));
 
-  // Step 2: Find the comment
-  log("info", "Step 2: Looking for target comment...");
+  // Step 2: Simulate reading the post and comments
+  log("info", "Step 2: Reading the post...");
+  await simulateReading();
+
+  // Step 3: Find the comment
+  log("info", "Step 3: Looking for target comment...");
   const commentEl = findComment(task);
   if (!commentEl) {
-    // If we can't find the specific comment, try to reply to the post directly
     log("warn", "Could not find specific comment, trying to post as a general comment");
 
     const editor = await findReplyEditor();
@@ -240,51 +420,86 @@ async function executeReplyTask(task) {
       return { success: false, error: "Could not find comment or any reply editor on page" };
     }
 
-    log("info", "Found general comment editor, typing reply...");
+    log("info", "Found general comment editor");
     await scrollToElement(editor);
+    await sleep(gaussianRandom(1000, 2500));
+
+    // Banner flow: attach image first, then type text
+    if (task.reply_type === "banner" && task.banner_type) {
+      log("info", `Banner reply: attaching ${task.banner_type} image...`);
+      const attached = await attachBannerImage(editor, task.banner_type);
+      if (attached) {
+        log("info", "Banner attached, waiting before typing text...");
+        await sleep(gaussianRandom(2000, 4000));
+      } else {
+        log("warn", "Banner attachment failed, continuing with text only");
+      }
+    }
+
     await humanType(editor, task.reply_message);
-    log("info", "Typing done, preparing to submit...");
-    await sleep(500);
+    log("info", "Typing done, reviewing before submit...");
+    await sleep(gaussianRandom(1500, 3000));
     const submitted = await submitReply(editor);
     log("info", `Submit result: ${submitted}`);
-    await sleep(2000);
+    await sleep(gaussianRandom(2000, 4000));
 
     return { success: true, method: "general_comment" };
   }
 
-  // Step 3: Click "Reply" button
-  log("info", "Step 3: Clicking reply button...");
+  // Step 4: Scroll to comment and click Reply
+  log("info", "Step 4: Clicking reply button...");
   await scrollToElement(commentEl);
+  await sleep(gaussianRandom(500, 1500));
   const clicked = await clickReplyButton(commentEl);
   if (!clicked) {
     log("warn", "Could not click reply button, trying to find editor anyway");
   }
 
-  // Step 4: Find the reply editor
-  log("info", "Step 4: Looking for reply editor...");
+  // Step 5: Find the reply editor
+  log("info", "Step 5: Looking for reply editor...");
   const editor = await findReplyEditor();
   if (!editor) {
     return { success: false, error: "Reply editor not found after clicking reply button" };
   }
 
-  // Step 5: Type the reply with human-like timing
-  log("info", `Step 5: Typing reply (${task.reply_message.length} chars)...`);
+  // Step 6: Brief pause before typing (thinking what to write)
+  log("info", "Step 6: Preparing to type...");
   await scrollToElement(editor);
+  await sleep(gaussianRandom(1000, 3000));
+
+  // Step 6.5: Banner flow - attach image before typing
+  if (task.reply_type === "banner" && task.banner_type) {
+    log("info", `Step 6.5: Attaching banner image (${task.banner_type})...`);
+    const attached = await attachBannerImage(editor, task.banner_type);
+    if (attached) {
+      log("info", "Banner attached, waiting before typing text...");
+      await sleep(gaussianRandom(2000, 4000));
+    } else {
+      log("warn", "Banner attachment failed, continuing with text only");
+    }
+  }
+
+  // Step 7: Type the reply
+  log("info", `Step 7: Typing reply (${task.reply_message.length} chars)...`);
   await humanType(editor, task.reply_message);
 
-  // Step 6: Submit
-  log("info", "Step 6: Submitting...");
-  await sleep(500 + Math.random() * 500);
+  // Step 8: Review before submit
+  log("info", "Step 8: Reviewing before submit...");
+  await sleep(gaussianRandom(1500, 3000));
+
+  // Step 9: Submit
+  log("info", "Step 9: Submitting...");
   await submitReply(editor);
 
-  // Step 7: Verify
-  log("info", "Step 7: Waiting for confirmation...");
-  await sleep(3000);
+  // Step 10: Wait and verify
+  log("info", "Step 10: Waiting for confirmation...");
+  await sleep(gaussianRandom(3000, 5000));
 
   return { success: true, method: "comment_reply" };
 }
 
-// Listen for messages from background.js
+// ========== Message Listener ==========
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "executeReply") {
     window.__pcReplyTask = message.task;
@@ -303,6 +518,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, error: err.message });
       });
 
-    return true; // async response
+    return true;
   }
 });

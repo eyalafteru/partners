@@ -1638,6 +1638,8 @@ async def get_pending_extension_tasks(
                 "lead_post_id": lead_post.id,
                 "post_url": lead_post.post_url,
                 "reply_message": lead_post.ai_reply,
+                "reply_type": lead_post.reply_type or "text",
+                "banner_type": lead_post.banner_type,
             },
         }
 

@@ -156,6 +156,11 @@ class LeadPost(Base):
     # תת-סוג דחיפות (עבור קטגוריית הובלות): urgent / exploring / professional / general
     urgency_type = Column(String(20), nullable=True)
 
+    # סוג תגובה: text (רגיל) / banner (תמונה + טקסט)
+    reply_type = Column(String(20), nullable=True)
+    # סוג באנר: savings / trust (רק כאשר reply_type=banner)
+    banner_type = Column(String(20), nullable=True)
+
     # תגובה אוטומטית דרך תוסף Chrome
     auto_reply_enabled = Column(Boolean, default=False)
     auto_reply_sent = Column(Boolean, default=False)
