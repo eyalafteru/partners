@@ -254,7 +254,8 @@ async def _send_notification_whatsapp(post: LeadPost, category: LeadCategory):
         f"📁 {post.group_name or 'קבוצה לא ידועה'}\n"
         f"📍 אזור: {post.area or 'לא ידוע'}\n\n"
         f"📝 *הפוסט:*\n{desc_preview}\n\n"
-        f"💬 *תגובה שפורסמה:*\n{reply_preview}"
+        f"💬 *תגובה שפורסמה:*\n{reply_preview}\n\n"
+        f"🔗 {post.post_url}"
     )
 
     try:

@@ -178,6 +178,18 @@ PRICE_KEYWORDS = [
     "זול", "משתלם", "חסכון", "מוזל", "מחירים", "עולה", "כסף",
 ]
 
+SKIP_REPLY_KEYWORDS = [
+    "תרומה", "תרומות", "לתרום", "גיוס כספים", "עזרה דחופה",
+    "הלום קרב", "פוסט טראומטי", "נפגעי טרור", "ניצולי שואה",
+    "צדקה", "מגבית", "קמפיין גיוס", "חולה סופני",
+    "נפטר", "נפטרה", "לזכר", "הלוויה", "שבעה", "אבל",
+]
+
+
+def _should_skip_reply(description: str) -> bool:
+    text = (description or "").lower()
+    return any(kw in text for kw in SKIP_REPLY_KEYWORDS)
+
 
 def choose_banner_type(description: str) -> str:
     text = (description or "").lower()
@@ -470,10 +482,14 @@ async def classify_and_notify_background(
             # AI reply - מייצר אם הקטגוריה דורשת התראה או תגובה אוטומטית
             ai_reply = ""
             urgency_type = "general"
+            skip_sensitive = _should_skip_reply(description)
+            if skip_sensitive:
+                logger.info(f"🚫 Skipping reply for post {post_id} - sensitive content (donation/charity)")
             should_generate_reply = (
                 matched_category
                 and matched_category.reply_prompt
                 and area_reply_enabled
+                and not skip_sensitive
                 and (matched_category.is_alert_worthy or matched_category.auto_reply_enabled)
             )
             if should_generate_reply:
