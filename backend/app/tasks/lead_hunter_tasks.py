@@ -37,6 +37,7 @@ PRIORITY_AREA = "מרכז"
 BLOCKED_GROUPS = [
     "1629283237109586",  # הובלות, מובילים ממומלצים, חיפוש מובילים
     "BeerShevaTogether",  # באר שבע ביחד
+    "186182019096864",  # דלתות פנים במחירי חיסול
 ]
 BRAVE_ALERT_PHONE = "0542575412"
 BRAVE_STUCK_ALERT_MINUTES = 20  # אם pending תקוע 20 דק = Brave לא פעיל
