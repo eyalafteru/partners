@@ -34,6 +34,9 @@ ACTIVE_HOUR_START = 7   # 07:00 שעון ישראל
 ACTIVE_HOUR_END = 23    # 23:00 שעון ישראל
 ISRAEL_UTC_OFFSET = 3   # UTC+3 (קיץ IDT). לעדכן ל-2 בחורף (אחרי אוקטובר)
 PRIORITY_AREA = "מרכז"
+BLOCKED_GROUPS = [
+    "1629283237109586",  # הובלות, מובילים ממומלצים, חיפוש מובילים
+]
 BRAVE_ALERT_PHONE = "0542575412"
 BRAVE_STUCK_ALERT_MINUTES = 20  # אם pending תקוע 20 דק = Brave לא פעיל
 APPROVAL_PHONE = "0542575412"
@@ -399,6 +402,15 @@ async def queue_lead_hunter_replies():
                 )
 
                 for post in eligible_posts:
+                    # --- הגנה: קבוצות חסומות ---
+                    if any(gid in (post.group_url or "") or gid in (post.post_url or "") for gid in BLOCKED_GROUPS):
+                        post.auto_reply_status = "group_blocked"
+                        logger.info(
+                            f"🎯 🚫 Lead Hunter: skipping post {post.id} - "
+                            f"blocked group: {post.group_name}"
+                        )
+                        continue
+
                     area = areas.get(post.area)
                     if area and not area.is_reply_enabled:
                         logger.debug(
