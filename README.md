@@ -368,23 +368,91 @@ GREENAPI_URL=https://7105.api.greenapi.com
 
 ## 💬 אסטרטגיית תגובות בפייסבוק
 
-### מצב נוכחי (מאי 2026): טקסט בלבד
+### מצב נוכחי (יוני 2026): טקסט בלבד, מגבלה הדרגתית
 - תגובות **קצרות** (משפט אחד), **ללא לינקים**, **ללא תמונות**, **ללא מספרי טלפון**
-- מטרה: בניית אמינות לחשבון משה עובדיה אחרי חסימות ותגובות Pending
-- סגנון: המלצה טבעית על "הובלות בישראל" בלי קישורים חיצוניים
-- דוגמאות: "תנסי עם הובלות בישראל", "כדאי לבדוק עם הובלות בישראל"
+- חשבון: **משה עובדיה** (מחובר דרך Brave + Chrome Extension)
+- סגנון: המלצה טבעית על "הובלות בישראל", עם "תכתבי/תכתוב לי בפרטי"
+- עדיפות לפוסטים מאזור **מרכז** (מובנה בקוד `PRIORITY_AREA`)
+
+### מגבלה יומית הדרגתית (DAILY_LIMIT_SCHEDULE)
+הופעלה ב-9 ביוני 2026. הספירה מתחילה מ-`updated_at` של הקטגוריה:
+- **שבוע 1** (ימים 1-7): 3-5 תגובות ביום (מספר אקראי-יציב לכל יום)
+- **שבוע 2** (ימים 8-14): 5-10 תגובות ביום
+- **שבוע 3+** (ימים 15+): 8-15 תגובות ביום
+- קובץ: `backend/app/tasks/lead_hunter_tasks.py`
+
+### הגנות בטיחות
+- מרווח 8-15 דקות בין תגובות (`MIN_GAP_BETWEEN_REPLIES_MIN` / `MAX_GAP_BETWEEN_REPLIES_MIN`)
+- שעות פעילות 07:00-23:00 שעון ישראל (`ISRAEL_UTC_OFFSET = 3` בקיץ, 2 בחורף)
+- מקסימום 3 משימות pending בו-זמנית
+- הגנת כפילויות (לא מגיב פעמיים לאותו URL)
+- פוסטים עד 48 שעות אחורה בלבד
+- delay של 15 דקות לפני תגובה (כדי להיראות טבעי)
+- התראת WhatsApp כש-Brave לא פעיל (20 דקות)
+
+### סינון פוסטים רגישים (SKIP_REPLY_KEYWORDS)
+פוסטים עם מילות מפתח רגישות לא מקבלים תגובה אוטומטית:
+- תרומות, צדקה, גיוס כספים, עזרה דחופה
+- הלום קרב, חיילים בודדים, עולים חדשים
+- הלוויה, שבעה, אבל, נפטר
+- למסירה, אשמח לעזרה
+- קובץ: `backend/app/services/lead_hunter_service.py`
+
+### סיווג AI - כללים חשובים
+- מי שקונה מוצר עם משלוח (דלתות, רהיטים) = "לא רלוונטי", לא הובלה
+- ספאמרים שמפרסמים את עצמם = קטגוריה 4 (מתחרה)
+- קובץ: `backend/app/services/lead_hunter_service.py` (SYSTEM_PROMPT)
+
+### קבוצות חסומות (BLOCKED_GROUPS)
+בדיקה ברמת הקוד -- פוסטים מקבוצות חסומות מסומנים אוטומטית כ-`group_blocked`:
+- `1629283237109586` -- הובלות, מובילים ממומלצים, חיפוש מובילים
+- `BeerShevaTogether` -- באר שבע ביחד
+- `186182019096864` -- דלתות פנים במחירי חיסול
+- קובץ: `backend/app/tasks/lead_hunter_tasks.py`
+
+### הודעות WhatsApp
+- כל תגובה שנכנסת לתור שולחת הודעת וואצאפ לסקירה ל-`0542575412` עם:
+  - פרטי הפוסט, קבוצה, אזור
+  - התגובה שפורסמה
+  - **לינק לפוסט**
+- התראה כש-Brave תקוע (pending > 20 דקות)
+
+### סטטוסים בממשק (auto_reply_status)
+| סטטוס | צבע | משמעות |
+|--------|------|---------|
+| `pending` | צהוב | ממתין לפרסום |
+| `working` | כחול | מפרסם כרגע |
+| `posted` / `sent` | ירוק | פורסם בהצלחה |
+| `failed` | אדום | נכשל |
+| `group_blocked` | אפור | קבוצה חסומה |
+| `skipped` | - | דולג (כפילות/ידני) |
 
 ### באנרים (מושבת זמנית - שמור לעתיד)
 תמונות באנר מוכנות בתיקייה `chrome-extension/banners/`:
 - `savings.png` - באנר חיסכון ("חסכו עד 40%")
 - `trust.png` - באנר אמינות ("מובילים מאומתים")
-
-הלוגיקה קיימת בקוד (מושבתת):
-- `backend/app/services/lead_hunter_service.py` - חלוקה 50/50 בין טקסט לבאנר (מסומן כהערה)
-- `chrome-extension/facebook_reply.js` - פונקציית `attachBannerImage` לצירוף תמונה
+- לוגיקה מושבתת ב-`lead_hunter_service.py` (מסומנת כהערה)
 - DB columns: `lead_posts.reply_type`, `lead_posts.banner_type`
+- **להפעלה מחדש:** הסר הערות מהבלוק ב-`classify_and_notify_background`
 
-**להפעלה מחדש:** הסר הערות מהבלוק ב-`classify_and_notify_background` ב-`lead_hunter_service.py`
+### היסטוריית חסימות
+| תאריך | אירוע | פעולה |
+|--------|--------|--------|
+| מרץ 2026 | תגובות Pending בקבוצות מרובות | הורדת לינקים ומספרי טלפון מהתגובות |
+| מאי 2026 | באנר+לינק = Pending מיידי | כיבוי באנרים, חזרה לטקסט בלבד |
+| 12 מאי | הפעלת 10/יום, עבד טוב | שבוע של פרסום מוצלח |
+| 1 יוני | חסימה מלאה "You can't use this feature" | עצירה מלאה |
+| 9 יוני | הפעלה מחדש 3-5/יום זהירה | מגבלה הדרגתית חדשה |
+
+---
+
+## ⚠️ גיליון פושר - שורות ריקות
+שורות ריקות בגיליון נגמרות = הפושר מפסיק לכתוב = המערכת לא מקבלת לידים חדשים.
+**קרה כבר פעמיים** (17 מאי, 17 יוני).
+- **גיליון**: [Posts](https://docs.google.com/spreadsheets/d/1Xbor7YEr_apjvmQZ9QYU01UKwKk_EKqlUTH_7C69LIU/edit?gid=128669743#gid=128669743)
+- **מצב נוכחי**: פתוח עד שורה 7000
+- **כשמגיעים לשורה 6500 -- להוסיף עוד 2000 שורות!**
+- **סימפטום**: `eligible=0` בלוגים, `MAX(created_at)` ישן
 
 ---
 
@@ -392,12 +460,45 @@ GREENAPI_URL=https://7105.api.greenapi.com
 
 קבוצות שבהן חשבון משה עובדיה חסום ולא ניתן להגיב (פוסטים מסומנים באפור במערכת):
 
-| קבוצה | קישור |
-|--------|--------|
-| הובלות, הובלות קטנות, הובלות דירות, הרכבות, מובילים ממומלצים, חיפוש מובילים | https://www.facebook.com/groups/1629283237109586 |
-| באר שבע ביחד | https://www.facebook.com/groups/BeerShevaTogether/ |
+| קבוצה | קישור | גם ב-BLOCKED_GROUPS |
+|--------|--------|:---:|
+| הובלות, מובילים ממומלצים, חיפוש מובילים | https://www.facebook.com/groups/1629283237109586 | V |
+| באר שבע ביחד | https://www.facebook.com/groups/BeerShevaTogether/ | V |
+| דלתות פנים במחירי חיסול | https://www.facebook.com/groups/186182019096864 | V |
 
-> עודכן: מאי 2026
+> עודכן: יוני 2026
+
+---
+
+## 📂 קבצים מרכזיים לתחזוקת Lead Hunter
+
+| קובץ | תפקיד |
+|--------|--------|
+| `backend/app/tasks/lead_hunter_tasks.py` | תור תגובות, מגבלות יומיות, BLOCKED_GROUPS, שעות פעילות |
+| `backend/app/services/lead_hunter_service.py` | פרומפטים AI, סיווג, SKIP_REPLY_KEYWORDS, יצירת תגובות |
+| `backend/app/api/facebook_marketing.py` | Extension task pickup + result (pending->working->posted) |
+| `backend/app/models/lead_hunter.py` | מודלים: LeadPost, LeadCategory, LeadArea |
+| `frontend/app/lead-hunter/page.tsx` | ממשק Lead Hunter + כפתור פרסום |
+| `chrome-extension/facebook_reply.js` | פרסום תגובות בפייסבוק (human-like typing) |
+| `scripts/lead_hunter_sheets.gs` | Google Apps Script - שולח פוסטים מגיליון לשרת |
+
+### פקודות שרת שימושיות
+
+```bash
+# בדיקת לוגים
+ssh root@49.13.31.182 "docker logs partnercalc-backend --since 1h 2>&1 | grep lead_hunter | tail -20"
+
+# בדיקת פוסט אחרון
+ssh root@49.13.31.182 "docker exec partnercalc-mariadb mysql -u partnercalc -ppartnercalc123 partnercalc -e 'SELECT MAX(created_at) FROM lead_posts;'"
+
+# הפעלת/כיבוי תגובות אוטומטיות
+ssh root@49.13.31.182 "docker exec partnercalc-mariadb mysql -u partnercalc -ppartnercalc123 partnercalc -e 'UPDATE lead_categories SET auto_reply_enabled = 1 WHERE id = 1;'"
+
+# ריסטארט backend
+ssh root@49.13.31.182 "cd /opt/partnercalc-os && git pull origin main && docker compose -f docker/docker-compose.prod.yml restart backend"
+
+# NOTE: use docker compose (not docker-compose)
+```
 
 ---
 
