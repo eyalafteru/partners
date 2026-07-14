@@ -433,7 +433,7 @@ async def queue_lead_hunter_replies():
                         continue
 
                     # --- ניסיון טלפון: תגובה 1 ביום עם מספר טלפון ---
-                    if PHONE_REPLIES_PER_DAY > 0 and sent_today == 0:
+                    if PHONE_REPLIES_PER_DAY > 0 and sent_today == 0 and post.ai_reply:
                         phone_today_result = await session.execute(
                             select(func.count(LeadPost.id)).where(
                                 and_(
@@ -445,7 +445,7 @@ async def queue_lead_hunter_replies():
                         )
                         phone_today = phone_today_result.scalar_one() or 0
                         if phone_today < PHONE_REPLIES_PER_DAY:
-                            post.ai_reply = f"{post.ai_reply}\n{PHONE_NUMBER}"
+                            post.ai_reply = post.ai_reply.replace("הובלות בישראל", f"הובלות בישראל {PHONE_NUMBER}")
                             logger.info(f"🎯 📞 Lead Hunter: added phone to post {post.id} ({phone_today+1}/{PHONE_REPLIES_PER_DAY})")
 
                     # --- סימון לפרסום ---
