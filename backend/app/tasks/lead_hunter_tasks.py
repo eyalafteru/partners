@@ -44,6 +44,8 @@ BRAVE_STUCK_ALERT_MINUTES = 20  # אם pending תקוע 20 דק = Brave לא פ�
 APPROVAL_PHONE = "0542575412"
 REQUIRE_WHATSAPP_APPROVAL = False  # True = ממתין לאישור WhatsApp. False = פרסום אוטומטי + הודעה לסקירה
 SEND_WHATSAPP_NOTIFICATION = True  # True = שולח הודעת WhatsApp לסקירה (לא חוסם פרסום)
+PHONE_REPLIES_PER_DAY = 1  # כמה תגובות עם טלפון ביום (0 = כבוי)
+PHONE_NUMBER = "053-7934107"  # הטלפון של הובלות בישראל
 
 # מגבלה יומית הדרגתית -- מספר אקראי-יציב שמשתנה כל יום
 DAILY_LIMIT_SCHEDULE = [
@@ -429,6 +431,22 @@ async def queue_lead_hunter_replies():
                             f"duplicate URL already replied: {post.post_url}"
                         )
                         continue
+
+                    # --- ניסיון טלפון: תגובה 1 ביום עם מספר טלפון ---
+                    if PHONE_REPLIES_PER_DAY > 0 and sent_today == 0:
+                        phone_today_result = await session.execute(
+                            select(func.count(LeadPost.id)).where(
+                                and_(
+                                    LeadPost.auto_reply_sent == True,
+                                    LeadPost.auto_reply_sent_at >= today_start,
+                                    LeadPost.ai_reply.like(f"%{PHONE_NUMBER}%"),
+                                )
+                            )
+                        )
+                        phone_today = phone_today_result.scalar_one() or 0
+                        if phone_today < PHONE_REPLIES_PER_DAY:
+                            post.ai_reply = f"{post.ai_reply}\n{PHONE_NUMBER}"
+                            logger.info(f"🎯 📞 Lead Hunter: added phone to post {post.id} ({phone_today+1}/{PHONE_REPLIES_PER_DAY})")
 
                     # --- סימון לפרסום ---
                     if REQUIRE_WHATSAPP_APPROVAL:
