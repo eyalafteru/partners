@@ -433,7 +433,7 @@ async def queue_lead_hunter_replies():
                         continue
 
                     # --- ניסיון טלפון: תגובה 1 ביום עם מספר טלפון ---
-                    if PHONE_REPLIES_PER_DAY > 0 and sent_today == 0 and post.ai_reply:
+                    if PHONE_REPLIES_PER_DAY > 0 and post.ai_reply:
                         phone_today_result = await session.execute(
                             select(func.count(LeadPost.id)).where(
                                 and_(
