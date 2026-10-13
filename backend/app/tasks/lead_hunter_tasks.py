@@ -44,14 +44,14 @@ BRAVE_STUCK_ALERT_MINUTES = 20  # אם pending תקוע 20 דק = Brave לא פ�
 APPROVAL_PHONE = "0542575412"
 REQUIRE_WHATSAPP_APPROVAL = False  # True = ממתין לאישור WhatsApp. False = פרסום אוטומטי + הודעה לסקירה
 SEND_WHATSAPP_NOTIFICATION = True  # True = שולח הודעת WhatsApp לסקירה (לא חוסם פרסום)
-PHONE_REPLIES_PER_DAY = 1  # כמה תגובות עם טלפון ביום (0 = כבוי)
+PHONE_REPLIES_PER_DAY = 2  # כמה תגובות עם טלפון ביום (0 = כבוי)
 PHONE_NUMBER = "053-7934107"  # הטלפון של הובלות בישראל
 
 # מגבלה יומית הדרגתית -- מספר אקראי-יציב שמשתנה כל יום
 DAILY_LIMIT_SCHEDULE = [
     (1, 7, 3, 5),       # שבוע 1: 3-5 ביום
     (8, 14, 5, 10),     # שבוע 2: 5-10 ביום
-    (15, 999, 8, 15),   # שבוע 3+: 8-15 ביום
+    (15, 999, 12, 20),  # שבוע 3+: 12-20 ביום
 ]
 
 
